@@ -178,30 +178,86 @@ def fig_mc(teren, granice, mc: MCTacke, cm, uslov):
     return f
 
 
-def fig_najbolja(teren, r: RezultatTackeV2, ctx: KontekstV2):
+def fig_tacka(teren, r: RezultatTackeV2, ctx: KontekstV2,
+              cijela_kupa: bool = True, z_uvecanje: float = 2.0):
+    """3D prikaz jedne tačke: teren + kupa + crveni presjek.
+
+    cijela_kupa=True crta CIJELU površinu kupe (providno i dio ispod
+    terena), pa se jasno vidi gdje kupa 'ulazi' u teren; presjek je
+    crvena kriva. Prozor se kadrira oko stvarnog footprinta, ne oko
+    cijelog integracionog bbox-a. z_uvecanje > 1 razvlači visinu da
+    reljef i kupa budu vidljivi (1 = stvarne proporcije).
+    """
     kupa = Kupa(wx=r.wx, wy=r.wy, wz=r.wz, k=r.k, ugao=r.ugao,
                 profil=ctx.profil)
     rez = presek_kupe_i_terena(kupa, teren, rezolucija=256, rafiniranje=2)
-    x0, x1, y0, y1 = rez.granice_racuna
-    pad = 0.25 * (x1 - x0)
-    n = 140
-    GX, GY = np.meshgrid(np.linspace(x0 - pad, x1 + pad, n),
-                         np.linspace(y0 - pad, y1 + pad, n))
+
+    # kadar: bbox svih presječnih kontura + 25% margine
+    if rez.konture:
+        sve = np.vstack(rez.konture)
+        x0, x1 = sve[:, 0].min(), sve[:, 0].max()
+        y0, y1 = sve[:, 1].min(), sve[:, 1].max()
+    else:
+        x0, x1, y0, y1 = rez.granice_racuna
+    pad = 0.25 * max(x1 - x0, y1 - y0, 2 * r.k)
+    vx0, vx1, vy0, vy1 = x0 - pad, x1 + pad, y0 - pad, y1 + pad
+
+    n = 150
+    GX, GY = np.meshgrid(np.linspace(vx0, vx1, n),
+                         np.linspace(vy0, vy1, n))
     ZT = teren.z(GX, GY)
     ZK = kupa.z(GX, GY)
-    tijelo = np.where(ZK > ZT + 1e-9, ZK, np.nan)
+
     f = go.Figure()
     f.add_trace(go.Surface(x=GX, y=GY, z=ZT, colorscale="Earth",
-                           showscale=False, name="teren"))
-    f.add_trace(go.Surface(x=GX, y=GY, z=tijelo, opacity=0.75,
+                           showscale=False, name="teren", opacity=1.0))
+
+    if cijela_kupa:
+        # cijela površina kupe, ali samo do dna kadra (da ne prekrije sve)
+        z_pod = float(np.nanmin(ZT)) - 2.0
+        ZK_cr = np.where(ZK >= z_pod, ZK, np.nan)
+        f.add_trace(go.Surface(x=GX, y=GY, z=ZK_cr, opacity=0.45,
+                               colorscale=[[0, "#c46a1b"], [1, "#e8a15c"]],
+                               showscale=False, name="kupa (cijela)"))
+    # tijelo iznad terena — punije, da se vidi šta je stvarni nasip
+    tijelo = np.where(ZK > ZT + 1e-9, ZK, np.nan)
+    f.add_trace(go.Surface(x=GX, y=GY, z=tijelo, opacity=0.95,
                            colorscale=[[0, "peru"], [1, "burlywood"]],
-                           showscale=False, name="kupa"))
+                           showscale=False, name="nasip (iznad terena)"))
+
     for i, kont in enumerate(rez.konture):
-        f.add_trace(go.Scatter3d(x=kont[:, 0], y=kont[:, 1], z=kont[:, 2] + 0.4,
-                                 mode="lines", line=dict(color="red", width=6),
-                                 name="presjek", showlegend=(i == 0)))
-    f.update_layout(scene=dict(aspectmode="data"), height=560,
-                    margin=dict(l=0, r=0, t=0, b=0))
+        f.add_trace(go.Scatter3d(x=kont[:, 0], y=kont[:, 1],
+                                 z=kont[:, 2] + 0.4, mode="lines",
+                                 line=dict(color="red", width=8),
+                                 name="presjek kupa–teren",
+                                 showlegend=(i == 0)))
+    kx, ky = kupa.gornja_kontura()
+    f.add_trace(go.Scatter3d(x=kx, y=ky, z=np.full_like(kx, r.wz) + 0.4,
+                             mode="lines",
+                             line=dict(color="royalblue", width=5),
+                             name="gornji plato"))
+    f.add_trace(go.Scatter3d(x=[r.wx], y=[r.wy], z=[r.wz + 1],
+                             mode="markers",
+                             marker=dict(color="royalblue", size=4,
+                                         symbol="diamond"),
+                             name="vrh", showlegend=False))
+
+    # proporcije: data = stvarne; z_uvecanje razvlači samo visinu
+    dx, dy = vx1 - vx0, vy1 - vy0
+    zmin = min(float(np.nanmin(ZT)), r.wz) - 2
+    zmax = max(float(np.nanmax(ZT)), r.wz) + 2
+    dz = max(zmax - zmin, 1.0)
+    m = max(dx, dy)
+    f.update_layout(
+        scene=dict(
+            aspectmode="manual",
+            aspectratio=dict(x=dx / m, y=dy / m,
+                             z=(dz / m) * float(z_uvecanje)),
+            zaxis=dict(range=[zmin, zmax], title="z (m)"),
+            camera=dict(eye=dict(x=1.3, y=-1.3, z=0.8)),
+        ),
+        height=600, margin=dict(l=0, r=0, t=0, b=0),
+        legend=dict(orientation="h", y=0.02))
     return f
 
 
@@ -284,9 +340,17 @@ with tab3:
 
     cA, cB, cC, cD = st.columns(4)
     mod = cA.radio("Režim", ["GA optimizacija (wz, k)", "Fiksna kupa (brzo)"])
-    max_tacaka = cB.number_input("Koliko tačaka obraditi", 1,
-                                 len(mc.prihvacene),
-                                 min(20, len(mc.prihvacene)))
+    izbor = cB.radio("Koje tačke obraditi",
+                     [f"Sve MC prihvaćene ({len(mc.prihvacene)})",
+                      "Slučajni podskup"])
+    if izbor.startswith("Slučajni"):
+        max_tacaka = cB.number_input("Veličina podskupa", 1,
+                                     len(mc.prihvacene),
+                                     min(20, len(mc.prihvacene)))
+        seed_pod = cB.number_input("Seed podskupa", 0, 99999, 7)
+    else:
+        max_tacaka = len(mc.prihvacene)
+        seed_pod = 0
     ugao = cC.number_input("Ugao kosine (°)", 15.0, 60.0, 37.0)
     profil = cD.selectbox("Profil kupe", ["matlab", "krug"])
 
@@ -327,7 +391,13 @@ with tab3:
             bar.progress(i / n, text=f"Tačka {i}/{n} — "
                          f"{'✓' if r else '✗ nedopustiva'}")
 
-        tacke = mc.prihvacene[:int(max_tacaka)]
+        if izbor.startswith("Slučajni") and int(max_tacaka) < len(mc.prihvacene):
+            rng = np.random.default_rng(int(seed_pod))
+            idx = rng.choice(len(mc.prihvacene), size=int(max_tacaka),
+                             replace=False)
+            tacke = mc.prihvacene[np.sort(idx)]
+        else:
+            tacke = mc.prihvacene
         if mod.startswith("GA"):
             rezultati = proracun_svih_tacaka(
                 tacke, ctx, mod="ga", callback=cb,
@@ -379,16 +449,30 @@ with tab3:
                            "rezultati_odlagaliste_v2.csv", "text/csv")
 
         best = rezultati[0]
-        st.subheader(f"Najbolja tačka: {best.naziv}")
+        st.subheader("3D prikaz tačke")
+        cP, cQ, cR = st.columns([2, 1, 1])
+        opcije_t = [f"{r.naziv}  (f={r.f_vrednost:.3f}, "
+                    f"V={r.zapremina:,.0f} m³)" for r in rezultati]
+        i_sel = cP.selectbox("Tačka za prikaz (sortirano po funkciji cilja)",
+                             range(len(rezultati)),
+                             format_func=lambda i: opcije_t[i])
+        cijela = cQ.checkbox("Prikaži cijelu kupu", value=True,
+                             help="Providno crta i dio kupe ispod terena — "
+                                  "jasno se vidi gdje kupa ulazi u teren.")
+        z_uv = cR.slider("Uveličanje visine", 1.0, 5.0, 2.0, 0.5,
+                         help="1 = stvarne proporcije; veće razvlači visinu.")
+        sel: RezultatTackeV2 = rezultati[int(i_sel)]
+
         m1, m2, m3, m4, m5 = st.columns(5)
-        m1.metric("Funkcija cilja", f"{best.f_vrednost:.4f}")
-        m2.metric("Zapremina", f"{best.zapremina:,.0f} m³")
-        m3.metric("Vrh / k", f"{best.wz:.1f} m / {best.k:.0f} m")
-        m4.metric("Distanca od CM", f"{best.distanca:.0f} m")
-        m5.metric("Petlji presjeka", best.broj_petlji)
-        if best.zone:
-            st.caption(f"Ekonomske zone: {best.zone}")
-        st.plotly_chart(fig_najbolja(teren, best, ctx),
+        m1.metric("Funkcija cilja", f"{sel.f_vrednost:.4f}")
+        m2.metric("Zapremina", f"{sel.zapremina:,.0f} m³")
+        m3.metric("Vrh / k", f"{sel.wz:.1f} m / {sel.k:.0f} m")
+        m4.metric("Distanca od CM", f"{sel.distanca:.0f} m")
+        m5.metric("Petlji presjeka", sel.broj_petlji)
+        if sel.zone:
+            st.caption(f"Ekonomske zone: {sel.zone}")
+        st.plotly_chart(fig_tacka(teren, sel, ctx, cijela_kupa=cijela,
+                                  z_uvecanje=z_uv),
                         use_container_width=True)
 
 st.caption("Geometrija: geometrija_v2 (visinska polja, ∬ max(0, z_kupa − z_teren) dA) · "
