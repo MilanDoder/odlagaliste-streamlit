@@ -1,0 +1,6 @@
+%% mv - nadmorska visina od koje se pravi zapremina(mora biti ispod terena 10 m)
+140
+%% broj generacija preporuke 3
+3
+%% uslov distance transporta
+2000
