@@ -151,35 +151,8 @@ def fig_pregled(teren, cm, granice, dobre, lose):
                              line=dict(color="yellow", width=7),
                              name="granica interesne zone"))
 
-    # zone interesa — grupisane po prefiksu, jedan trace po boji
-    sve_zone = list(dobre) + list(lose)
-    if sve_zone:
-        for prefiks, boja in BOJE_ZONA:
-            xs, ys = [], []
-            n_zona = 0
-            for zona in sve_zone:
-                if not zona.naziv.startswith(prefiks):
-                    continue
-                px = np.asarray(zona.x_data, float)
-                py = np.asarray(zona.y_data, float)
-                if not (np.isclose(px[0], px[-1]) and np.isclose(py[0], py[-1])):
-                    px = np.append(px, px[0])
-                    py = np.append(py, py[0])
-                xs.extend(px.tolist() + [None])
-                ys.extend(py.tolist() + [None])
-                n_zona += 1
-            if n_zona == 0:
-                continue
-            xa = np.array([np.nan if v is None else v for v in xs])
-            ya = np.array([np.nan if v is None else v for v in ys])
-            za = np.full_like(xa, np.nan)
-            ok = ~np.isnan(xa)
-            za[ok] = teren.z(xa[ok], ya[ok]) + 2.0
-            f.add_trace(go.Scatter3d(
-                x=xa, y=ya, z=za, mode="lines",
-                line=dict(color=boja, width=5),
-                name=f"{prefiks} ({n_zona})", legendgroup=prefiks,
-                connectgaps=False))
+    # zone interesa — zajednička funkcija (ista kao u MC tabu)
+    _dodaj_zone_na_teren(f, teren, dobre, lose)
 
     f.add_trace(go.Scatter3d(x=[cm[0]], y=[cm[1]],
                              z=[float(teren.z(cm[0], cm[1])) + 4],
@@ -193,8 +166,43 @@ def fig_pregled(teren, cm, granice, dobre, lose):
     return f
 
 
+def _dodaj_zone_na_teren(f, teren, dobre, lose, opacity_pomak=2.0):
+    """Docrtava sve zone interesa (grupisane po prefiksu, boje iz
+    BOJE_ZONA) položene na teren — dijeli se između tabova Podaci i MC."""
+    sve_zone = list(dobre or []) + list(lose or [])
+    if not sve_zone:
+        return
+    for prefiks, boja in BOJE_ZONA:
+        xs, ys = [], []
+        n_zona = 0
+        for zona in sve_zone:
+            if not zona.naziv.startswith(prefiks):
+                continue
+            px = np.asarray(zona.x_data, float)
+            py = np.asarray(zona.y_data, float)
+            if not (np.isclose(px[0], px[-1]) and np.isclose(py[0], py[-1])):
+                px = np.append(px, px[0])
+                py = np.append(py, py[0])
+            xs.extend(px.tolist() + [None])
+            ys.extend(py.tolist() + [None])
+            n_zona += 1
+        if n_zona == 0:
+            continue
+        xa = np.array([np.nan if v is None else v for v in xs])
+        ya = np.array([np.nan if v is None else v for v in ys])
+        za = np.full_like(xa, np.nan)
+        ok = ~np.isnan(xa)
+        za[ok] = teren.z(xa[ok], ya[ok]) + opacity_pomak
+        f.add_trace(go.Scatter3d(
+            x=xa, y=ya, z=za, mode="lines",
+            line=dict(color=boja, width=5),
+            name=f"{prefiks} ({n_zona})", legendgroup=prefiks,
+            connectgaps=False))
+
+
 def fig_mc_3d(teren, granice, mc: MCTacke, cm, uslov,
-              prikazi_odbacene: bool = True):
+              prikazi_odbacene: bool = True,
+              dobre=None, lose=None, prikazi_zone: bool = True):
     """3D prikaz Monte Carlo tačaka na terenu.
 
     Teren kao površina; interesna zona žuta linija na terenu; prihvaćene
@@ -215,6 +223,9 @@ def fig_mc_3d(teren, granice, mc: MCTacke, cm, uslov,
                              mode="lines",
                              line=dict(color="yellow", width=8),
                              name="interesna zona"))
+
+    if prikazi_zone:
+        _dodaj_zone_na_teren(f, teren, dobre, lose)
 
     boje = {"van interesne zone": "gray", "u lošoj (K) zoni": "black",
             "predaleko od centra masa": "orange",
@@ -409,12 +420,16 @@ with tab2:
         mc: MCTacke = st.session_state["mc"]
         st.write({k: v for k, v in mc.statistika.items()})
 
-        prikazi_odb = st.checkbox("Prikaži i odbačene tačke", value=True,
-                                  help="Odbačene tačke obojene po razlogu; "
-                                       "isključi za pregledniji prikaz.")
+        cO1, cO2 = st.columns(2)
+        prikazi_odb = cO1.checkbox("Prikaži i odbačene tačke", value=True,
+                                   help="Odbačene tačke obojene po razlogu; "
+                                        "isključi za pregledniji prikaz.")
+        prikazi_zone = cO2.checkbox("Prikaži zone interesa", value=True)
         st.plotly_chart(fig_mc_3d(teren, granice, mc, cm,
                                   st.session_state["uslov"],
-                                  prikazi_odbacene=prikazi_odb),
+                                  prikazi_odbacene=prikazi_odb,
+                                  dobre=dobre, lose=lose,
+                                  prikazi_zone=prikazi_zone),
                         use_container_width=True)
 
         if len(mc.prihvacene) == 0:
