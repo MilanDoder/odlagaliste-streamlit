@@ -141,40 +141,74 @@ def fig_pregled(teren, cm, granice, lose):
     return f
 
 
-def fig_mc(teren, granice, mc: MCTacke, cm, uslov):
-    GX, GY, ZT = _teren_grid(teren, 120)
+def fig_mc_3d(teren, granice, mc: MCTacke, cm, uslov,
+              prikazi_odbacene: bool = True):
+    """3D prikaz Monte Carlo tačaka na terenu.
+
+    Teren kao površina; interesna zona žuta linija na terenu; prihvaćene
+    tačke zelene, odbačene obojene po razlogu; narandžasti isprekidani
+    krug = max distanca od centra masa (položen na teren).
+    """
+    GX, GY, ZT = _teren_grid(teren, 140)
     f = go.Figure()
-    f.add_trace(go.Contour(x=GX[0], y=GY[:, 0], z=ZT, colorscale="Earth",
-                           showscale=False, opacity=0.85))
-    f.add_trace(go.Scatter(x=list(granice.x_poly) + [granice.x_poly[0]],
-                           y=list(granice.y_poly) + [granice.y_poly[0]],
-                           mode="lines", line=dict(color="gold", width=2),
-                           name="interesna zona"))
+    f.add_trace(go.Surface(x=GX, y=GY, z=ZT, colorscale="Earth",
+                           showscale=False, opacity=0.95, name="teren",
+                           hovertemplate="x: %{x:.0f}<br>y: %{y:.0f}"
+                                         "<br>teren: %{z:.1f} m<extra></extra>"))
+
+    # interesna zona — označena na terenu
+    zx = np.append(granice.x_poly, granice.x_poly[0])
+    zy = np.append(granice.y_poly, granice.y_poly[0])
+    f.add_trace(go.Scatter3d(x=zx, y=zy, z=teren.z(zx, zy) + 2.5,
+                             mode="lines",
+                             line=dict(color="yellow", width=8),
+                             name="interesna zona"))
+
     boje = {"van interesne zone": "gray", "u lošoj (Z-5) zoni": "black",
             "predaleko od centra masa": "orange",
             "van pokrivenosti terena": "purple"}
-    for razlog, t in mc.odbacene.items():
-        f.add_trace(go.Scatter(x=t[:, 0], y=t[:, 1], mode="markers",
-                               marker=dict(color=boje.get(razlog, "red"),
-                                           size=4, opacity=0.55),
-                               name=f"✗ {razlog} ({len(t)})"))
+    if prikazi_odbacene:
+        for razlog, t in mc.odbacene.items():
+            if len(t) == 0:
+                continue
+            f.add_trace(go.Scatter3d(
+                x=t[:, 0], y=t[:, 1], z=teren.z(t[:, 0], t[:, 1]) + 1.5,
+                mode="markers",
+                marker=dict(color=boje.get(razlog, "red"), size=2.5,
+                            opacity=0.5),
+                name=f"✗ {razlog} ({len(t)})"))
+
     if len(mc.prihvacene):
-        f.add_trace(go.Scatter(x=mc.prihvacene[:, 0], y=mc.prihvacene[:, 1],
-                               mode="markers",
-                               marker=dict(color="lime", size=6,
-                                           line=dict(color="darkgreen", width=1)),
-                               name=f"✓ prihvaćene ({len(mc.prihvacene)})"))
-    th = np.linspace(0, 2 * np.pi, 100)
-    f.add_trace(go.Scatter(x=cm[0] + uslov * np.cos(th),
-                           y=cm[1] + uslov * np.sin(th),
-                           mode="lines", line=dict(color="orange", dash="dash"),
-                           name=f"max distanca ({uslov:.0f} m)"))
-    f.add_trace(go.Scatter(x=[cm[0]], y=[cm[1]], mode="markers",
-                           marker=dict(color="red", size=10, symbol="star"),
-                           name="centar masa"))
-    f.update_layout(height=560, yaxis=dict(scaleanchor="x", scaleratio=1),
-                    margin=dict(l=0, r=0, t=10, b=0),
-                    legend=dict(orientation="h", y=-0.08))
+        px, py = mc.prihvacene[:, 0], mc.prihvacene[:, 1]
+        pz = teren.z(px, py)
+        f.add_trace(go.Scatter3d(
+            x=px, y=py, z=pz + 2.0, mode="markers",
+            marker=dict(color="lime", size=4,
+                        line=dict(color="darkgreen", width=1)),
+            name=f"✓ prihvaćene ({len(mc.prihvacene)})",
+            hovertemplate="x: %{x:.0f}<br>y: %{y:.0f}"
+                          "<br>teren: %{z:.1f} m<extra></extra>"))
+
+    # krug max distance od centra masa — položen na teren
+    th = np.linspace(0, 2 * np.pi, 160)
+    kx = cm[0] + uslov * np.cos(th)
+    ky = cm[1] + uslov * np.sin(th)
+    x0, x1, y0, y1 = teren.xy_granice
+    u = (kx >= x0) & (kx <= x1) & (ky >= y0) & (ky <= y1)
+    f.add_trace(go.Scatter3d(x=kx[u], y=ky[u],
+                             z=teren.z(kx[u], ky[u]) + 2.5, mode="lines",
+                             line=dict(color="orange", width=5, dash="dash"),
+                             name=f"max distanca ({uslov:.0f} m)"))
+    f.add_trace(go.Scatter3d(x=[cm[0]], y=[cm[1]],
+                             z=[float(teren.z(cm[0], cm[1])) + 4],
+                             mode="markers",
+                             marker=dict(color="red", size=7, symbol="x"),
+                             name="centar masa"))
+
+    f.update_layout(scene=dict(aspectmode="data",
+                               camera=dict(eye=dict(x=1.3, y=-1.3, z=0.9))),
+                    height=620, margin=dict(l=0, r=0, t=0, b=0),
+                    legend=dict(orientation="h", y=-0.04))
     return f
 
 
@@ -322,12 +356,36 @@ with tab2:
     if "mc" in st.session_state:
         mc: MCTacke = st.session_state["mc"]
         st.write({k: v for k, v in mc.statistika.items()})
-        st.plotly_chart(fig_mc(teren, granice, mc, cm,
-                               st.session_state["uslov"]),
+
+        prikazi_odb = st.checkbox("Prikaži i odbačene tačke", value=True,
+                                  help="Odbačene tačke obojene po razlogu; "
+                                       "isključi za pregledniji prikaz.")
+        st.plotly_chart(fig_mc_3d(teren, granice, mc, cm,
+                                  st.session_state["uslov"],
+                                  prikazi_odbacene=prikazi_odb),
                         use_container_width=True)
+
         if len(mc.prihvacene) == 0:
             st.warning("Nijedna tačka nije prošla filtere — povećaj broj "
                        "tačaka ili opusti max distancu.")
+        else:
+            st.subheader(f"Prihvaćene tačke ({len(mc.prihvacene)})")
+            px, py = mc.prihvacene[:, 0], mc.prihvacene[:, 1]
+            df_mc = pd.DataFrame({
+                "Tačka": [f"point_{i+1}" for i in range(len(px))],
+                "X": px, "Y": py,
+                "Kota_terena_m": teren.z(px, py),
+                "Distanca_od_CM_m": np.hypot(px - cm[0], py - cm[1]),
+            })
+            st.dataframe(df_mc.style.format({
+                "X": "{:.1f}", "Y": "{:.1f}",
+                "Kota_terena_m": "{:.1f}",
+                "Distanca_od_CM_m": "{:.0f}"}),
+                use_container_width=True, height=320)
+            st.download_button(
+                "Preuzmi prihvaćene tačke (CSV)",
+                df_mc.to_csv(index=False).encode("utf-8"),
+                "mc_tacke.csv", "text/csv")
 
 # ==================== TAB 3: PRORAČUN I REZULTATI ==========================
 with tab3:
