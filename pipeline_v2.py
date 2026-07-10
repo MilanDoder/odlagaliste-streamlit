@@ -191,8 +191,10 @@ class KontekstV2:
     uslov_distance: float = float("inf")
     rezolucija: int = 160
     rafiniranje: int = 1
+    lose_zone: list = field(default_factory=list)
 
     _zona_path: MplPath = field(init=False, repr=False, default=None)
+    _lose_paths: list = field(init=False, repr=False, default=None)
 
     def zona_path(self) -> MplPath:
         if self._zona_path is None:
@@ -202,6 +204,17 @@ class KontekstV2:
                 p = np.vstack([p, p[0]])
             self._zona_path = MplPath(p)
         return self._zona_path
+
+    def lose_paths(self) -> list:
+        if self._lose_paths is None:
+            self._lose_paths = []
+            for zona in (self.lose_zone or []):
+                p = np.column_stack([np.asarray(zona.x_data, float),
+                                     np.asarray(zona.y_data, float)])
+                if not np.allclose(p[0], p[-1]):
+                    p = np.vstack([p, p[0]])
+                self._lose_paths.append((zona, MplPath(p)))
+        return self._lose_paths
 
 
 @dataclass
@@ -220,6 +233,7 @@ class RezultatTackeV2:
     c1: float
     c2: float
     c3: float
+    ukupna_cena: float
     zone: str
     unutar_zone: bool
     konture: list = field(default_factory=list)
@@ -228,13 +242,14 @@ class RezultatTackeV2:
     ZAGLAVLJE = ["Naziv_tacke", "X", "Y", "Z_vrha", "K", "Funkcija_cilja",
                  "Zapremina_m3", "Osnova_m2", "Petlji", "Ugao",
                  "Distanca_m", "c1_transport", "c2_visina", "c3_zemljiste",
-                 "Zone", "Unutar_zone"]
+                 "Ukupna_cena", "Zone", "Unutar_zone"]
 
     def kao_red(self) -> list:
         return [self.naziv, self.wx, self.wy, self.wz, self.k,
                 self.f_vrednost, self.zapremina, self.povrsina_osnove,
                 self.broj_petlji, self.ugao, self.distanca,
-                self.c1, self.c2, self.c3, self.zone, self.unutar_zone]
+                self.c1, self.c2, self.c3, self.ukupna_cena,
+                self.zone, self.unutar_zone]
 
 
 def _evaluiraj(wz: float, k: float, wx: float, wy: float,
@@ -260,6 +275,22 @@ def _evaluiraj(wz: float, k: float, wx: float, wy: float,
     tacke = np.vstack(rez.konture)[:, :2]
     if not np.all(ctx.zona_path().contains_points(tacke)):
         return VELIKA, rez, 0.0, "", 0.0
+
+    # LOŠE (K) ZONE: footprint kupe ne smije ZAHVATATI lošu zonu.
+    # Dva testa: (a) presječna kontura ulazi u K zonu; (b) K zona je
+    # cijela unutar footprinta (kontura je ne siječe, ali je površina
+    # osnove prekriva) — provjera tjemena K zone unutar kontura.
+    if ctx.lose_zone:
+        konture_paths = [MplPath(k[:, :2]) for k in rez.konture
+                         if len(k) >= 3]
+        for zona, put in ctx.lose_paths():
+            if np.any(put.contains_points(tacke)):
+                return VELIKA, rez, 0.0, "", 0.0
+            tjemena = np.column_stack([np.asarray(zona.x_data, float),
+                                       np.asarray(zona.y_data, float)])
+            for kp in konture_paths:
+                if np.any(kp.contains_points(tjemena)):
+                    return VELIKA, rez, 0.0, "", 0.0
 
     # DISTANCA od centra masa (transportno ograničenje, MATLAB c(3))
     distanca = distanca_od_centra_masa(wx, wy, ctx.centar_masa)
@@ -341,6 +372,7 @@ def proracun_tacke(
         f_vrednost=f, zapremina=rez.zapremina,
         povrsina_osnove=rez.povrsina_osnove, broj_petlji=rez.broj_petlji,
         ugao=ctx.ugao, distanca=dist, c1=c1, c2=c2, c3=c3,
+        ukupna_cena=c1 + c2 + c3,
         zone=zone_str, unutar_zone=True, konture=rez.konture,
         trajanje_s=time.perf_counter() - t0)
 

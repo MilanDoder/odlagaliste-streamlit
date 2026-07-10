@@ -276,7 +276,8 @@ def fig_mc_3d(teren, granice, mc: MCTacke, cm, uslov,
 
 
 def fig_tacka(teren, r: RezultatTackeV2, ctx: KontekstV2,
-              cijela_kupa: bool = True, z_uvecanje: float = 2.0):
+              cijela_kupa: bool = True, z_uvecanje: float = 2.0,
+              dobre=None, lose=None):
     """3D prikaz jedne tačke: teren + kupa + crveni presjek.
 
     cijela_kupa=True crta CIJELU površinu kupe (providno i dio ispod
@@ -328,6 +329,8 @@ def fig_tacka(teren, r: RezultatTackeV2, ctx: KontekstV2,
                                  line=dict(color="red", width=8),
                                  name="presjek kupa–teren",
                                  showlegend=(i == 0)))
+    _dodaj_zone_na_teren(f, teren, dobre, lose)
+
     kx, ky = kupa.gornja_kontura()
     f.add_trace(go.Scatter3d(x=kx, y=ky, z=np.full_like(kx, r.wz) + 0.4,
                              mode="lines",
@@ -350,6 +353,8 @@ def fig_tacka(teren, r: RezultatTackeV2, ctx: KontekstV2,
             aspectmode="manual",
             aspectratio=dict(x=dx / m, y=dy / m,
                              z=(dz / m) * float(z_uvecanje)),
+            xaxis=dict(range=[vx0, vx1]),
+            yaxis=dict(range=[vy0, vy1]),
             zaxis=dict(range=[zmin, zmax], title="z (m)"),
             camera=dict(eye=dict(x=1.3, y=-1.3, z=0.8)),
         ),
@@ -511,7 +516,8 @@ with tab3:
             donja_granica_zapremine=float(v_min),
             gornja_granica_zapremine=float(v_max),
             uslov_distance=st.session_state["uslov"],
-            rezolucija=int(rez_slider), rafiniranje=1)
+            rezolucija=int(rez_slider), rafiniranje=1,
+            lose_zone=lose)
 
         bar = st.progress(0.0, text="Proračun...")
         t0 = time.perf_counter()
@@ -571,7 +577,7 @@ with tab3:
             "Funkcija_cilja": "{:.4f}", "Zapremina_m3": "{:,.0f}",
             "Osnova_m2": "{:,.0f}", "Distanca_m": "{:.0f}",
             "c1_transport": "{:,.0f}", "c2_visina": "{:,.0f}",
-            "c3_zemljiste": "{:,.0f}"}), use_container_width=True)
+            "c3_zemljiste": "{:,.0f}", "Ukupna_cena": "{:,.0f}"}), use_container_width=True)
 
         csv = df.to_csv(index=False).encode("utf-8")
         st.download_button("Preuzmi rezultate (CSV)", csv,
@@ -592,16 +598,17 @@ with tab3:
                          help="1 = stvarne proporcije; veće razvlači visinu.")
         sel: RezultatTackeV2 = rezultati[int(i_sel)]
 
-        m1, m2, m3, m4, m5 = st.columns(5)
+        m1, m2, m3, m4, m5, m6 = st.columns(6)
         m1.metric("Funkcija cilja", f"{sel.f_vrednost:.4f}")
         m2.metric("Zapremina", f"{sel.zapremina:,.0f} m³")
         m3.metric("Vrh / k", f"{sel.wz:.1f} m / {sel.k:.0f} m")
         m4.metric("Distanca od CM", f"{sel.distanca:.0f} m")
         m5.metric("Petlji presjeka", sel.broj_petlji)
+        m6.metric("Ukupna cijena", f"{sel.ukupna_cena:,.0f}")
         if sel.zone:
             st.caption(f"Ekonomske zone: {sel.zone}")
         st.plotly_chart(fig_tacka(teren, sel, ctx, cijela_kupa=cijela,
-                                  z_uvecanje=z_uv),
+                                  z_uvecanje=z_uv, dobre=dobre, lose=lose),
                         use_container_width=True)
 
 st.caption("Geometrija: geometrija_v2 (visinska polja, ∬ max(0, z_kupa − z_teren) dA) · "
