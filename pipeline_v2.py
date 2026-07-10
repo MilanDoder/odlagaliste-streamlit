@@ -270,7 +270,9 @@ def _evaluiraj(wz: float, k: float, wx: float, wy: float,
 
     # funkcija cilja — identična originalu, ali sa mnv umjesto zakucanog 90
     c1 = (distanca / 1000.0) * 0.8 * V
-    c2 = V * (((wz - ctx.mnv) / 0.08 * 1.6) / 1000.0) * 1.2
+    # max(0, ...): kota vrha ispod mnv NE smije davati negativan (nagradni)
+    # trošak dizanja — bez ovoga GA 'bježi' u kop da naplati kopanje
+    c2 = V * ((max(wz - ctx.mnv, 0.0) / 0.08 * 1.6) / 1000.0) * 1.2
     f = (c1 + c2 + eko) / V
     return f, rez, eko, zone_str, distanca
 

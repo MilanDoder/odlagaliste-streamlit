@@ -476,7 +476,8 @@ with tab3:
     else:
         max_tacaka = len(mc.prihvacene)
         seed_pod = 0
-    ugao = cC.number_input("Ugao kosine (°)", 15.0, 60.0, 37.0)
+    ugao = cC.number_input("Ugao kosine (°)", min_value=5.0,
+                           max_value=60.0, value=37.0, step=1.0)
     profil = cD.selectbox("Profil kupe", ["matlab", "krug"])
 
     cE, cF, cG, cH = st.columns(4)
@@ -490,8 +491,11 @@ with tab3:
                                 int(par.broj_generacija))
         wz_fix, k_fix = None, 120.0
     else:
-        h_fix = cG.number_input("Visina platoa iznad terena (m)", 5.0, 200.0, 40.0)
-        k_fix = cH.number_input("k — širina platoa (m)", 20.0, 500.0, 120.0)
+        h_fix = cG.number_input("Visina platoa iznad terena (m)",
+                                min_value=5.0, max_value=200.0,
+                                value=40.0, step=5.0)
+        k_fix = cH.number_input("k — širina platoa (m)", min_value=20.0,
+                                max_value=500.0, value=120.0, step=10.0)
         popul, gener = 20, 3
 
     rez_slider = st.select_slider(
