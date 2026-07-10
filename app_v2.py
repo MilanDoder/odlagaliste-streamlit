@@ -8,7 +8,7 @@ kompletnim Monte Carlo izborom tačaka:
   1. PODACI      — upload terena, centra masa, granice interesne zone,
                    ekonomskih zona i dodatnih parametara (ili ugrađeni Buvac)
   2. MC TAČKE    — Monte Carlo generisanje kandidat-tačaka sa filterima:
-                   interesna zona, loše (Z-5) zone, max distanca od centra
+                   interesna zona, loše (K) zone, max distanca od centra
                    masa, pokrivenost terena
   3. PRORAČUN    — za svaku prihvaćenu tačku: zapremina, osnova, ekonomske
                    zone, distanca, funkcija cilja; fiksna kupa ili GA (wz, k)
@@ -122,7 +122,7 @@ def _teren_grid(teren: Teren, n: int = 150):
 
 
 BOJE_ZONA = [("Z-1", "orange"), ("Z-2", "green"), ("Z-3", "dodgerblue"),
-             ("Z-4", "hotpink"), ("K-5", "red")]
+             ("Z-4", "hotpink"), ("K", "red"), ("Z-5", "red")]
 
 
 def _boja_zone(naziv: str) -> str:
@@ -135,7 +135,7 @@ def _boja_zone(naziv: str) -> str:
 def fig_pregled(teren, cm, granice, dobre, lose):
     """Tab Podaci: teren, centar masa, granica interesne zone i sve zone
     interesa obojene po prefiksu (Z-1 narandžasta, Z-2 zelena, Z-3 plava,
-    Z-4 roza, Z-5 crvena). Zone istog prefiksa su jedan trace (poligoni
+    Z-4 roza, K crvena). Zone istog prefiksa su jedan trace (poligoni
     razdvojeni None tačkama) — brzo i sa jednom stavkom u legendi.
     """
     GX, GY, ZT = _teren_grid(teren)
@@ -216,7 +216,7 @@ def fig_mc_3d(teren, granice, mc: MCTacke, cm, uslov,
                              line=dict(color="yellow", width=8),
                              name="interesna zona"))
 
-    boje = {"van interesne zone": "gray", "u lošoj (Z-5) zoni": "black",
+    boje = {"van interesne zone": "gray", "u lošoj (K) zoni": "black",
             "predaleko od centra masa": "orange",
             "van pokrivenosti terena": "purple"}
     if prikazi_odbacene:
@@ -382,9 +382,9 @@ with tab2:
 
     cD, cE, cF = st.columns(3)
     f_zona = cD.checkbox("Filter: interesna zona", value=True)
-    f_lose = cE.checkbox("Filter: loše (Z-5) zone", value=True,
+    f_lose = cE.checkbox("Filter: loše (K) zone", value=True,
                          disabled=(len(lose) == 0),
-                         help="U ovom setu podataka nema Z-5 zona." if not lose else None)
+                         help="U ovom setu podataka nema K zona." if not lose else None)
     f_teren = cF.checkbox("Filter: pokrivenost terena", value=True,
                           help="Odbacuje tačke van oblaka tačaka terena — "
                                "tamo kota terena nije definisana.")
@@ -586,5 +586,5 @@ with tab3:
                         use_container_width=True)
 
 st.caption("Geometrija: geometrija_v2 (visinska polja, ∬ max(0, z_kupa − z_teren) dA) · "
-           "MC filteri: interesna zona, Z-5, distanca od CM, pokrivenost terena · "
+           "MC filteri: interesna zona, K zone, distanca od CM, pokrivenost terena · "
            "Funkcija cilja: (c1 + c2 + eko) / V")

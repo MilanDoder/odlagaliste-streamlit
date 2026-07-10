@@ -74,7 +74,7 @@ def monte_carlo_tacke(
         oblaka tačaka — tamo kota terena nije definisana);
       - filtrira tačke dalje od uslov_distance od centra masa
         (transportno ograničenje — sada zaista primijenjeno);
-      - filtrira tačke unutar loših (Z-5) zona — kao i ranije;
+      - filtrira tačke unutar loših (K) zona — kao i ranije;
       - filtrira tačke van interesne zone — kao i ranije.
 
     Redoslijed filtera je od jeftinijeg ka skupljem; svaka tačka se
@@ -118,7 +118,7 @@ def monte_carlo_tacke(
             if not np.allclose(zp[0], zp[-1]):
                 zp = np.vstack([zp, zp[0]])
             u_losoj |= MplPath(zp).contains_points(pts)
-        primijeni(u_losoj, "u lošoj (Z-5) zoni")
+        primijeni(u_losoj, "u lošoj (K) zoni")
 
     # 3. distanca od centra masa (transportno ograničenje)
     if centar_masa is not None and uslov_distance is not None and uslov_distance > 0:

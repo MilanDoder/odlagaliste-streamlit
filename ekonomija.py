@@ -51,6 +51,7 @@ ZONA_FORMULA: dict[str, object] = {
     "Z-4-1": lambda p: CENA1 * p * (1 + K2),
     "Z-4-2": lambda p: CENA1 * p * (1 + K2 + K4),
     "Z-5":   lambda p: CENA2 * p * (1 + K1 + K4),
+    "K-5":   lambda p: CENA2 * p * (1 + K1 + K4),
 }
 
 

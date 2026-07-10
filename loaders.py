@@ -151,8 +151,8 @@ def ucitaj_ekonomske_zone(putanja: str | Path) -> tuple[list[EkonomskaZona], lis
         4970315,4970315,...  ← Y koordinate poligona
 
     Klasifikacija zona (isto kao MATLAB kod):
-        Z-1, Z-3, Z-4 → dobre zone (dobreEkonomskeZone)
-        Z-5           → lose zone  (loseEkonomskeZone)
+        Z-*           → dobre zone (dobreEkonomskeZone)
+        K-* (npr. K-5) → lose zone; legacy Z-5 takođe lose
     """
     putanja = Path(putanja)
     if not putanja.exists():
@@ -172,7 +172,7 @@ def ucitaj_ekonomske_zone(putanja: str | Path) -> tuple[list[EkonomskaZona], lis
         linija = linije[i]
 
         # Zona počinje ako linija izgleda kao "Z-X..." pattern
-        if re.match(r'^Z-\d', linija):
+        if re.match(r'^[ZK]-\d', linija):
             naziv = linija
             try:
                 cena     = float(linije[i + 1])
@@ -188,7 +188,7 @@ def ucitaj_ekonomske_zone(putanja: str | Path) -> tuple[list[EkonomskaZona], lis
                                  x_data=x_data, y_data=y_data)
 
             # Klasifikacija: Z-5 su loše, sve ostalo (Z-1, Z-3, Z-4) su dobre
-            if naziv.startswith("Z-5"):
+            if naziv.startswith("K") or naziv.startswith("Z-5"):
                 lose.append(zona)
             else:
                 dobre.append(zona)
