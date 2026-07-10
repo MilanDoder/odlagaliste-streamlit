@@ -122,7 +122,7 @@ def _teren_grid(teren: Teren, n: int = 150):
 
 
 BOJE_ZONA = [("Z-1", "orange"), ("Z-2", "green"), ("Z-3", "dodgerblue"),
-             ("Z-4", "hotpink"), ("Z-5", "red")]
+             ("Z-4", "hotpink"), ("K-5", "red")]
 
 
 def _boja_zone(naziv: str) -> str:
