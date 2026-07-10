@@ -121,23 +121,75 @@ def _teren_grid(teren: Teren, n: int = 150):
     return GX, GY, teren.z(GX, GY)
 
 
-def fig_pregled(teren, cm, granice, lose):
+BOJE_ZONA = [("Z-1", "orange"), ("Z-2", "green"), ("Z-3", "dodgerblue"),
+             ("Z-4", "hotpink"), ("Z-5", "red")]
+
+
+def _boja_zone(naziv: str) -> str:
+    for prefiks, boja in BOJE_ZONA:
+        if naziv.startswith(prefiks):
+            return boja
+    return "white"
+
+
+def fig_pregled(teren, cm, granice, dobre, lose):
+    """Tab Podaci: teren, centar masa, granica interesne zone i sve zone
+    interesa obojene po prefiksu (Z-1 narandžasta, Z-2 zelena, Z-3 plava,
+    Z-4 roza, Z-5 crvena). Zone istog prefiksa su jedan trace (poligoni
+    razdvojeni None tačkama) — brzo i sa jednom stavkom u legendi.
+    """
     GX, GY, ZT = _teren_grid(teren)
     f = go.Figure()
     f.add_trace(go.Surface(x=GX, y=GY, z=ZT, colorscale="Earth",
-                           showscale=False, name="teren"))
-    zp = teren.z(granice.x_poly, granice.y_poly)
-    f.add_trace(go.Scatter3d(x=granice.x_poly, y=granice.y_poly, z=zp + 2,
-                             mode="lines", line=dict(color="yellow", width=6),
-                             name="interesna zona"))
+                           showscale=False, name="teren", opacity=0.95))
+
+    # granica interesne zone (žuto)
+    zx = np.append(granice.x_poly, granice.x_poly[0])
+    zy = np.append(granice.y_poly, granice.y_poly[0])
+    f.add_trace(go.Scatter3d(x=zx, y=zy, z=teren.z(zx, zy) + 2.5,
+                             mode="lines",
+                             line=dict(color="yellow", width=7),
+                             name="granica interesne zone"))
+
+    # zone interesa — grupisane po prefiksu, jedan trace po boji
+    sve_zone = list(dobre) + list(lose)
+    if sve_zone:
+        for prefiks, boja in BOJE_ZONA:
+            xs, ys = [], []
+            n_zona = 0
+            for zona in sve_zone:
+                if not zona.naziv.startswith(prefiks):
+                    continue
+                px = np.asarray(zona.x_data, float)
+                py = np.asarray(zona.y_data, float)
+                if not (np.isclose(px[0], px[-1]) and np.isclose(py[0], py[-1])):
+                    px = np.append(px, px[0])
+                    py = np.append(py, py[0])
+                xs.extend(px.tolist() + [None])
+                ys.extend(py.tolist() + [None])
+                n_zona += 1
+            if n_zona == 0:
+                continue
+            xa = np.array([np.nan if v is None else v for v in xs])
+            ya = np.array([np.nan if v is None else v for v in ys])
+            za = np.full_like(xa, np.nan)
+            ok = ~np.isnan(xa)
+            za[ok] = teren.z(xa[ok], ya[ok]) + 2.0
+            f.add_trace(go.Scatter3d(
+                x=xa, y=ya, z=za, mode="lines",
+                line=dict(color=boja, width=5),
+                name=f"{prefiks} ({n_zona})", legendgroup=prefiks,
+                connectgaps=False))
+
     f.add_trace(go.Scatter3d(x=[cm[0]], y=[cm[1]],
-                             z=[float(teren.z(cm[0], cm[1])) + 3],
-                             mode="markers", marker=dict(color="red", size=6,
-                                                         symbol="diamond"),
+                             z=[float(teren.z(cm[0], cm[1])) + 4],
+                             mode="markers",
+                             marker=dict(color="red", size=7,
+                                         symbol="diamond"),
                              name="centar masa"))
-    f.update_layout(scene=dict(aspectmode="data"), height=520,
+    f.update_layout(scene=dict(aspectmode="data"), height=560,
                     margin=dict(l=0, r=0, t=0, b=0),
-                    legend=dict(orientation="h"))
+                    legend=dict(orientation="h", y=-0.04))
     return f
 
 
@@ -316,7 +368,7 @@ with tab1:
     st.caption(f"mnv = {par.nadmorska_visina:.0f} m · "
                f"uslov distance = {par.uslov_distance:.0f} m · "
                f"GA generacija = {par.broj_generacija}")
-    st.plotly_chart(fig_pregled(teren, cm, granice, lose),
+    st.plotly_chart(fig_pregled(teren, cm, granice, dobre, lose),
                     use_container_width=True)
 
 # ======================= TAB 2: MONTE CARLO ================================
