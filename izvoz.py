@@ -350,3 +350,90 @@ def izvezi_sve(
         "excel_validni": p_validni,
         "dxf": p_dxf,
     }
+
+
+# ---------------------------------------------------------------------------
+# DXF izvoz za NOVE (pipeline_v2) rezultate — kupe svih dopustivih tačaka
+# ---------------------------------------------------------------------------
+
+def izvezi_dxf_v2(
+    rezultati: list,
+    teren,
+    profil: str = "matlab",
+    putanja: str | Path = "kupe_export.dxf",
+    n_izvodnica: int = 24,
+) -> Path:
+    """Izvozi kupe svih dopustivih tačaka (RezultatTackeV2) u DXF R12.
+
+    AutoCAD otvara fajl direktno (File → Open) i može ga snimiti kao .dwg.
+
+    Za svaku tačku, na zasebnom sloju "point_N":
+      • gornja kontura platoa (zatvorena 3D polilinija na koti wz) — plavo
+      • sve presječne konture kupa–teren (3D polilinije na terenu) — crveno
+      • izvodnice kosine: radijalne linije od ivice platoa do presjeka
+        s terenom (daju CAD-u čitljiv 3D oblik kupe) — bijelo
+
+    Args:
+        rezultati:    lista RezultatTackeV2 (moraju imati .konture)
+        teren:        geometrija_v2.Teren (za izvodnice)
+        profil:       profil kupe korišten u proračunu
+        putanja:      izlazni .dxf fajl
+        n_izvodnica:  broj radijalnih linija po kupi
+
+    Returns:
+        Path do zapisanog fajla.
+    """
+    from geometrija_v2 import Kupa
+
+    putanja = Path(putanja)
+    with DxfWriter(putanja) as dxf:
+        for i, r in enumerate(rezultati, start=1):
+            sloj = f"point_{i}"
+            kupa = Kupa(wx=r.wx, wy=r.wy, wz=r.wz, k=r.k,
+                        ugao=r.ugao, profil=profil)
+
+            # 1) gornja kontura platoa (plavo, ACI 5)
+            dxf._sloj, dxf._boja = sloj, 5
+            kx, ky = kupa.gornja_kontura(n=96)
+            dxf.polilinija(kx, ky, np.full_like(kx, r.wz))
+
+            # 2) presječne konture na terenu (crveno, ACI 1)
+            dxf._boja = 1
+            for kont in (r.konture or []):
+                kont = np.asarray(kont)
+                if len(kont) < 3:
+                    continue
+                # zatvori petlju ako nije zatvorena
+                if not np.allclose(kont[0], kont[-1]):
+                    kont = np.vstack([kont, kont[0]])
+                dxf.polilinija(kont[:, 0], kont[:, 1], kont[:, 2])
+
+            # 3) izvodnice kosine (bijelo, ACI 7): od ivice platoa niz
+            #    kosinu do prvog presjeka s terenom (bisekcija po d=0)
+            dxf._boja = 7
+            th = np.linspace(0.0, 2.0 * np.pi, n_izvodnica, endpoint=False)
+            rt = kupa.r_top(th)
+            r_max = kupa.max_radijus(teren.z_min) * 1.02
+            for t_i, rt_i in zip(th, rt):
+                ux, uy = np.cos(t_i), np.sin(t_i)
+                rr = np.linspace(rt_i, r_max, 80)
+                px = r.wx + rr * ux
+                py = r.wy + rr * uy
+                d = kupa.z(px, py) - teren.z(px, py)
+                if d[0] <= 0:          # plato već ispod terena u tom pravcu
+                    continue
+                neg = np.nonzero(d <= 0)[0]
+                if len(neg) == 0:      # kosina ne dodiruje teren u dosegu
+                    continue
+                j = neg[0]
+                # linearna interpolacija nule između j-1 i j
+                f0, f1 = d[j - 1], d[j]
+                w = f0 / (f0 - f1)
+                rx = px[j - 1] + w * (px[j] - px[j - 1])
+                ry = py[j - 1] + w * (py[j] - py[j - 1])
+                rz = float(kupa.z(rx, ry))
+                dxf.polilinija(
+                    np.array([r.wx + rt_i * ux, rx]),
+                    np.array([r.wy + rt_i * uy, ry]),
+                    np.array([r.wz, rz]))
+    return putanja

@@ -580,8 +580,25 @@ with tab3:
             "c3_zemljiste": "{:,.0f}", "Ukupna_cena": "{:,.0f}"}), use_container_width=True)
 
         csv = df.to_csv(index=False).encode("utf-8")
-        st.download_button("Preuzmi rezultate (CSV)", csv,
-                           "rezultati_odlagaliste_v2.csv", "text/csv")
+        cD1, cD2 = st.columns(2)
+        cD1.download_button("Preuzmi rezultate (CSV)", csv,
+                            "rezultati_odlagaliste_v2.csv", "text/csv")
+
+        # DXF izvoz svih dopustivih kupa (AutoCAD: File → Open, pa po
+        # želji Save As → .dwg — DWG je zatvoren format i ne piše se direktno)
+        import tempfile as _tf
+        from izvoz import izvezi_dxf_v2
+        _tmp = _tf.NamedTemporaryFile(delete=False, suffix=".dxf")
+        _tmp.close()
+        izvezi_dxf_v2(rezultati, teren, profil=ctx.profil, putanja=_tmp.name)
+        with open(_tmp.name, "rb") as _fh:
+            dxf_bytes = _fh.read()
+        cD2.download_button(
+            f"Preuzmi kupe svih tačaka (DXF za AutoCAD, {len(rezultati)})",
+            dxf_bytes, "kupe_odlagaliste_v2.dxf", "application/dxf",
+            help="Otvara se direktno u AutoCAD-u; za .dwg koristi Save As "
+                 "u AutoCAD-u. Svaka tačka je na svom sloju point_N: plavi "
+                 "plato, crveni presjek s terenom, bijele izvodnice kosine.")
 
         best = rezultati[0]
         st.subheader("3D prikaz tačke")
