@@ -34,6 +34,7 @@ from loaders import (ucitaj_teren as l_teren, ucitaj_ekonomske_zone,
                      ucitaj_centar_masa, ucitaj_granice_zone,
                      ucitaj_dodatne_parametre)
 from geometrija_v2 import Kupa, Teren, presek_kupe_i_terena
+from stepenasta_kupa import StepenastaKupa
 from pipeline_v2 import (KontekstV2, MCTacke, RezultatTackeV2,
                          monte_carlo_tacke, proracun_svih_tacaka)
 
@@ -371,8 +372,9 @@ teren, vertices, dobre, lose, cm, granice, par = _ucitaj_podatke()
 
 st.title("Optimizacija odlagališta — v2 (nova geometrija)")
 
-tab1, tab2, tab3 = st.tabs(["1 · Podaci", "2 · Monte Carlo tačke",
-                            "3 · Proračun i rezultati"])
+tab1, tab2, tab3, tab4 = st.tabs(["1 · Podaci", "2 · Monte Carlo tačke",
+                                  "3 · Proračun i rezultati",
+                                  "4 · Stepenasti prikaz odlagališta"])
 
 # =========================== TAB 1: PODACI =================================
 with tab1:
@@ -627,6 +629,170 @@ with tab3:
         st.plotly_chart(fig_tacka(teren, sel, ctx, cijela_kupa=cijela,
                                   z_uvecanje=z_uv, dobre=dobre, lose=lose),
                         use_container_width=True)
+
+
+# ================= TAB 4: STEPENASTI PRIKAZ ODLAGALIŠTA ====================
+with tab4:
+    if "rezultati" not in st.session_state or not st.session_state["rezultati"]:
+        st.info("Prvo pokreni proračun u tabu 3 — ovdje se biraju dobre "
+                "(dopustive) kupe iz tih rezultata.")
+    else:
+        rezultati = st.session_state["rezultati"]
+        ctx = st.session_state["ctx"]
+
+        st.subheader("Stepenasta (etažna) kupa")
+        opcije = [f"{r.naziv}  (f={r.f_vrednost:.3f}, V={r.zapremina:,.0f} m³)"
+                  for r in rezultati]
+        i_k = st.selectbox("Izaberi kupu (dopustive tačke iz taba 3)",
+                           range(len(rezultati)),
+                           format_func=lambda i: opcije[i], key="step_sel")
+        rk = rezultati[int(i_k)]
+
+        z_apex = float(teren.z(rk.wx, rk.wy))
+        # "visina terena gdje se sijeku kupa i teren" — najviša kota presjeka
+        if rk.konture:
+            z_presjek_max = float(max(np.asarray(kk)[:, 2].max()
+                                      for kk in rk.konture))
+        else:
+            z_presjek_max = z_apex
+        visina_kupe = rk.wz - z_apex
+
+        c1_, c2_, c3_, c4_ = st.columns(4)
+        c1_.metric("Kota vrha kupe", f"{rk.wz:.1f} m")
+        c2_.metric("Visina kupe (iznad terena u vrhu)", f"{visina_kupe:.1f} m")
+        c3_.metric("Kote presjeka s terenom",
+                   f"{min(np.asarray(kk)[:, 2].min() for kk in rk.konture):.1f}"
+                   f"–{z_presjek_max:.1f} m" if rk.konture else "—")
+        c4_.metric("Širina platoa k", f"{rk.k:.0f} m")
+
+        min_wz = float(np.ceil(z_presjek_max + 1.0))
+        cA_, cB_, cC_ = st.columns(3)
+        wz_novo = cA_.number_input(
+            "Nova kota vrha (m)", min_value=min_wz,
+            max_value=float(teren.z_max + 300.0),
+            value=float(max(rk.wz, min_wz)), step=5.0,
+            help=f"Ne može ispod najviše kote presjeka kupe i terena "
+                 f"({z_presjek_max:.1f} m).")
+        korak = cB_.number_input("Visina etaže — korak (m)", min_value=2.0,
+                                 max_value=100.0, value=10.0, step=1.0)
+        berma = cC_.number_input("Širina berme — suženje po nivou (m)",
+                                 min_value=0.0, max_value=50.0, value=4.0,
+                                 step=0.5)
+
+        skupa = StepenastaKupa(wx=rk.wx, wy=rk.wy, wz=float(wz_novo),
+                               k=rk.k, ugao=rk.ugao, korak=float(korak),
+                               berma=float(berma), profil=ctx.profil)
+        rez_s = presek_kupe_i_terena(skupa, teren, rezolucija=256,
+                                     rafiniranje=2)
+        glatka = Kupa(wx=rk.wx, wy=rk.wy, wz=float(wz_novo), k=rk.k,
+                      ugao=rk.ugao, profil=ctx.profil)
+        rez_g = presek_kupe_i_terena(glatka, teren, rezolucija=256,
+                                     rafiniranje=1)
+
+        if not rez_s.ima_preseka:
+            st.warning("Stepenasta kupa nema presjeka s terenom — podigni "
+                       "novu kotu vrha.")
+        else:
+            m1_, m2_, m3_, m4_ = st.columns(4)
+            m1_.metric("Zapremina (stepenasta)",
+                       f"{rez_s.zapremina:,.0f} m³",
+                       delta=f"{rez_s.zapremina - rez_g.zapremina:+,.0f} "
+                             f"vs glatka", delta_color="off")
+            m2_.metric("Površina osnove", f"{rez_s.povrsina_osnove:,.0f} m²")
+            m3_.metric("Broj etaža",
+                       int(np.ceil((wz_novo - z_apex) / korak)))
+            m4_.metric("Petlji presjeka", rez_s.broj_petlji)
+
+            # ---- 3D prikaz ----
+            cO1_, cO2_ = st.columns(2)
+            z_uv_s = cO1_.slider("Uveličanje visine", 1.0, 5.0, 2.0, 0.5,
+                                 key="step_zuv")
+            zone_s = cO2_.checkbox("Prikaži zone interesa", value=False,
+                                   key="step_zone")
+
+            x0s, x1s, y0s, y1s = rez_s.granice_racuna
+            if rez_s.konture:
+                svek = np.vstack(rez_s.konture)
+                x0s, x1s = svek[:, 0].min(), svek[:, 0].max()
+                y0s, y1s = svek[:, 1].min(), svek[:, 1].max()
+            pads = 0.22 * max(x1s - x0s, y1s - y0s, 2 * rk.k)
+            vx0s, vx1s = x0s - pads, x1s + pads
+            vy0s, vy1s = y0s - pads, y1s + pads
+            ns = 170
+            GXs, GYs = np.meshgrid(np.linspace(vx0s, vx1s, ns),
+                                   np.linspace(vy0s, vy1s, ns))
+            ZTs = teren.z(GXs, GYs)
+            ZKs = skupa.z(GXs, GYs)
+            tijelo_s = np.where(ZKs > ZTs + 1e-9, ZKs, np.nan)
+
+            fs = go.Figure()
+            fs.add_trace(go.Surface(x=GXs, y=GYs, z=ZTs, colorscale="Earth",
+                                    showscale=False, name="teren"))
+            fs.add_trace(go.Surface(x=GXs, y=GYs, z=tijelo_s, opacity=0.9,
+                                    colorscale=[[0, "peru"],
+                                                [1, "burlywood"]],
+                                    showscale=False, name="stepenasta kupa"))
+            if zone_s:
+                _dodaj_zone_na_teren(fs, teren, dobre, lose)
+            for i2, kont in enumerate(rez_s.konture):
+                fs.add_trace(go.Scatter3d(
+                    x=kont[:, 0], y=kont[:, 1], z=kont[:, 2] + 0.4,
+                    mode="lines", line=dict(color="red", width=7),
+                    name="presjek s terenom", showlegend=(i2 == 0)))
+            prvi_prsten = True
+            for pr in skupa.ivice_etaza(teren=teren):
+                fs.add_trace(go.Scatter3d(
+                    x=pr["x"], y=pr["y"], z=pr["z"] + 0.3, mode="lines",
+                    line=dict(color="royalblue", width=3),
+                    name="ivice etaža", legendgroup="etaze",
+                    showlegend=prvi_prsten, connectgaps=False))
+                prvi_prsten = False
+
+            dxs, dys = vx1s - vx0s, vy1s - vy0s
+            zmin_s = float(np.nanmin(ZTs)) - 2
+            zmax_s = float(wz_novo) + 2
+            dzs = max(zmax_s - zmin_s, 1.0)
+            ms_ = max(dxs, dys)
+            fs.update_layout(
+                scene=dict(aspectmode="manual",
+                           aspectratio=dict(x=dxs / ms_, y=dys / ms_,
+                                            z=(dzs / ms_) * float(z_uv_s)),
+                           xaxis=dict(range=[vx0s, vx1s]),
+                           yaxis=dict(range=[vy0s, vy1s]),
+                           zaxis=dict(range=[zmin_s, zmax_s],
+                                      title="z (m)")),
+                height=620, margin=dict(l=0, r=0, t=0, b=0),
+                legend=dict(orientation="h", y=0.02))
+            st.plotly_chart(fs, use_container_width=True)
+
+            # radijalni profil kroz vrh — da se stepenice jasno vide
+            azp = st.slider("Azimut profila (°)", 0, 180, 0, 5,
+                            key="step_az")
+            ap_ = np.radians(azp)
+            Rp = 0.55 * (x1s - x0s) + pads
+            tp = np.linspace(-Rp, Rp, 800)
+            pxp = rk.wx + tp * np.cos(ap_)
+            pyp = rk.wy + tp * np.sin(ap_)
+            ztp, zkp = teren.z(pxp, pyp), skupa.z(pxp, pyp)
+            fp2 = go.Figure()
+            fp2.add_trace(go.Scatter(x=tp, y=np.where(zkp > ztp, zkp, ztp),
+                                     mode="lines",
+                                     line=dict(color="peru", width=0),
+                                     showlegend=False))
+            fp2.add_trace(go.Scatter(x=tp, y=ztp, mode="lines",
+                                     fill="tonexty",
+                                     fillcolor="rgba(205,133,63,0.55)",
+                                     line=dict(color="black", width=2),
+                                     name="teren"))
+            fp2.add_trace(go.Scatter(x=tp, y=zkp, mode="lines",
+                                     line=dict(color="royalblue", width=2),
+                                     name="stepenasta kupa"))
+            fp2.update_layout(height=300, margin=dict(l=0, r=0, t=10, b=0),
+                              xaxis_title="rastojanje od vrha (m)",
+                              yaxis_title="kota (m)",
+                              legend=dict(orientation="h", y=1.12))
+            st.plotly_chart(fp2, use_container_width=True)
+
 
 st.caption("Geometrija: geometrija_v2 (visinska polja, ∬ max(0, z_kupa − z_teren) dA) · "
            "MC filteri: interesna zona, K zone, distanca od CM, pokrivenost terena · "
