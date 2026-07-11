@@ -909,3 +909,9 @@ with tab4:
 st.caption("Geometrija: geometrija_v2 (visinska polja, ∬ max(0, z_kupa − z_teren) dA) · "
            "MC filteri: interesna zona, K zone, distanca od CM, pokrivenost terena · "
            "Funkcija cilja: (c1 + c2 + eko) / V")
+
+
+
+
+
+
