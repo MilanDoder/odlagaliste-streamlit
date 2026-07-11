@@ -604,8 +604,16 @@ with tab3:
                        "opusti granice zapremine ili povećaj max distancu.")
             st.stop()
 
-        df = pd.DataFrame([r.kao_red() for r in rezultati],
-                          columns=RezultatTackeV2.ZAGLAVLJE)
+        _kolone = RezultatTackeV2.ZAGLAVLJE
+        _redovi = []
+        for r in rezultati:
+            red = r.kao_red()
+            if len(red) != len(_kolone):
+                # stari objekti iz sesije prije analize delova (17 kolona):
+                # ubaci prazne Uzeti_deo i Delovi iza kolone Petlji
+                red = list(red[:9]) + ["", ""] + list(red[9:])
+            _redovi.append(red)
+        df = pd.DataFrame(_redovi, columns=_kolone)
         st.dataframe(df.style.format({
             "X": "{:.0f}", "Y": "{:.0f}", "Z_vrha": "{:.1f}", "K": "{:.1f}",
             "Funkcija_cilja": "{:.4f}", "Zapremina_m3": "{:,.0f}",
@@ -909,9 +917,3 @@ with tab4:
 st.caption("Geometrija: geometrija_v2 (visinska polja, ∬ max(0, z_kupa − z_teren) dA) · "
            "MC filteri: interesna zona, K zone, distanca od CM, pokrivenost terena · "
            "Funkcija cilja: (c1 + c2 + eko) / V")
-
-
-
-
-
-
