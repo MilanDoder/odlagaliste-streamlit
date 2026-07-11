@@ -1,0 +1,466 @@
+diff --git a/app_v2.py b/app_v2.py
+index 8e57fd7..3c3cb3e 100644
+--- a/app_v2.py
++++ b/app_v2.py
+@@ -324,12 +324,44 @@ def fig_tacka(teren, r: RezultatTackeV2, ctx: KontekstV2,
+                            colorscale=[[0, "peru"], [1, "burlywood"]],
+                            showscale=False, name="nasip (iznad terena)"))
+ 
+-    for i, kont in enumerate(rez.konture):
+-        f.add_trace(go.Scatter3d(x=kont[:, 0], y=kont[:, 1],
+-                                 z=kont[:, 2] + 0.4, mode="lines",
+-                                 line=dict(color="red", width=8),
+-                                 name="presjek kupa–teren",
+-                                 showlegend=(i == 0)))
++    if getattr(r, "delovi", None):
++        # VIŠE DELOVA: uzeti deo crveno, odbačeni sivo + oznake A, B, C...
++        prvi_uzet, prvi_odb = True, True
++        for deo in r.delovi:
++            boja = "red" if deo["uzet"] else "gray"
++            ime = ("presjek — uzeti deo" if deo["uzet"]
++                   else "presjek — odbačeni deo")
++            for kont in deo["konture"]:
++                kont = np.asarray(kont)
++                f.add_trace(go.Scatter3d(
++                    x=kont[:, 0], y=kont[:, 1], z=kont[:, 2] + 0.4,
++                    mode="lines", line=dict(color=boja, width=8),
++                    name=ime,
++                    showlegend=(prvi_uzet if deo["uzet"] else prvi_odb)))
++                if deo["uzet"]:
++                    prvi_uzet = False
++                else:
++                    prvi_odb = False
++            cx, cy, cz = deo["centar"]
++            status = "✓" if deo["uzet"] else "✗"
++            f.add_trace(go.Scatter3d(
++                x=[cx], y=[cy], z=[cz + 8],
++                mode="text", text=[f"{deo['oznaka']} {status}"],
++                textfont=dict(size=22, color=boja),
++                name=f"deo {deo['oznaka']}", showlegend=False,
++                hovertext=(f"Deo {deo['oznaka']}: "
++                           f"V = {deo['zapremina']:,.0f} m³, "
++                           f"P = {deo['povrsina']:,.0f} m²"
++                           + ("" if deo["uzet"]
++                              else f" — odbačen ({deo.get('razlog', '')})")),
++                hoverinfo="text"))
++    else:
++        for i, kont in enumerate(rez.konture):
++            f.add_trace(go.Scatter3d(x=kont[:, 0], y=kont[:, 1],
++                                     z=kont[:, 2] + 0.4, mode="lines",
++                                     line=dict(color="red", width=8),
++                                     name="presjek kupa–teren",
++                                     showlegend=(i == 0)))
+     _dodaj_zone_na_teren(f, teren, dobre, lose)
+ 
+     kx, ky = kupa.gornja_kontura()
+@@ -622,10 +654,22 @@ with tab3:
+         m2.metric("Zapremina", f"{sel.zapremina:,.0f} m³")
+         m3.metric("Vrh / k", f"{sel.wz:.1f} m / {sel.k:.0f} m")
+         m4.metric("Distanca od CM", f"{sel.distanca:.0f} m")
+-        m5.metric("Petlji presjeka", sel.broj_petlji)
++        m5.metric("Petlji presjeka", sel.broj_petlji,
++                  delta=f"uzet deo {sel.uzeti_deo}" if sel.uzeti_deo else None,
++                  delta_color="off")
+         m6.metric("Ukupna cijena", f"{sel.ukupna_cena:,.0f}")
+         if sel.zone:
+             st.caption(f"Ekonomske zone: {sel.zone}")
++        if sel.delovi:
++            st.info("Presjek ima više odvojenih delova — analiziran je "
++                    "svaki zasebno, a zapremina/cijena se odnose SAMO na "
++                    f"uzeti deo **{sel.uzeti_deo}**:\n\n"
++                    + "\n".join(
++                        f"- **{d['oznaka']}**: V = {d['zapremina']:,.0f} m³, "
++                        f"P = {d['povrsina']:,.0f} m² — "
++                        + ("✅ **uzet**" if d["uzet"]
++                           else f"❌ odbačen ({d.get('razlog') or 'lošiji'})")
++                        for d in sel.delovi))
+         st.plotly_chart(fig_tacka(teren, sel, ctx, cijela_kupa=cijela,
+                                   z_uvecanje=z_uv, dobre=dobre, lose=lose),
+                         use_container_width=True)
+diff --git a/geometrija_v2.py b/geometrija_v2.py
+index d8cc674..107d97f 100644
+--- a/geometrija_v2.py
++++ b/geometrija_v2.py
+@@ -500,6 +500,136 @@ def _rafiniraj_celije_abs(kupa: Kupa, teren: Teren,
+     return V_sub.sum(axis=(1, 2)), A_sub.sum(axis=(1, 2))
+ 
+ 
++# ===========================================================================
++# ANALIZA DELOVA — kada presjek ima VIŠE odvojenih petlji (npr. rijeka
++# presiječe footprint), svaki povezani deo {d > 0} se analizira zasebno:
++# sopstvena zapremina, površina, konture i oznaka (A, B, C, ...).
++# ===========================================================================
++
++@dataclass
++class DeoPreseka:
++    """Jedan povezani deo footprinta {d > 0} — zaseban 'nasip'."""
++    oznaka: str                  # "A", "B", "C", ... (A = najveća zapremina)
++    zapremina: float             # m³ — zapremina samo ovog dela
++    povrsina: float              # m² — površina osnove samo ovog dela
++    konture: list                # lista (K_i, 3) 3D petlji koje pripadaju delu
++    centar: tuple                # (x, y, z_teren) tačka najveće debljine —
++                                 # pogodna za postavljanje oznake na prikazu
++    max_debljina: float          # m — najveća visina nasipa u delu
++
++
++def analiza_delova(
++    kupa: Kupa,
++    teren: Teren,
++    rezolucija: int = 256,
++    rafiniranje: int = 2,
++    margina: float = 1.05,
++) -> list[DeoPreseka]:
++    """Podjela presjeka na povezane delove sa zapreminom po delu.
++
++    Koristi ISTU mrežu i isti integracioni postupak kao
++    presek_kupe_i_terena (trapez + rafiniranje graničnih ćelija), pa je
++    zbir zapremina svih delova ≈ ukupna zapremina iz PresekRezultat.
++
++    Povezanost: 8-susjedstvo nad maskom {d > 0} (scipy.ndimage.label).
++    Svaka presječna petlja se dodjeljuje delu čije pozitivne čvorove
++    dodiruje (većinsko glasanje po tjemenima petlje) — tako i eventualne
++    'rupe' (ostrva terena) ostaju uz svoj deo.
++
++    Returns:
++        lista DeoPreseka, sortirana po zapremini opadajuće i označena
++        slovima A, B, C, ... — prazna lista ako presjeka nema.
++    """
++    from scipy import ndimage
++
++    # --- ista mreža kao u presek_kupe_i_terena ------------------------------
++    R = kupa.max_radijus(teren.z_min) * margina
++    x0, x1 = kupa.wx - R, kupa.wx + R
++    y0, y1 = kupa.wy - R, kupa.wy + R
++    n = int(rezolucija)
++    gx = np.linspace(x0, x1, n + 1)
++    gy = np.linspace(y0, y1, n + 1)
++    hx = (x1 - x0) / n
++    hy = (y1 - y0) / n
++
++    GX, GY = np.meshgrid(gx, gy)
++    d = kupa.z(GX, GY) - teren.z(GX, GY)
++    poz = d > 0.0
++    if not np.any(poz):
++        return []
++
++    # --- povezani delovi (8-susjedstvo) -------------------------------------
++    labels, n_lab = ndimage.label(poz, structure=np.ones((3, 3), int))
++    if n_lab == 0:
++        return []
++
++    # --- zapremina i površina po ćelijama (kao u presek_kupe_i_terena) ------
++    dc = np.maximum(d, 0.0)
++    c00 = dc[:-1, :-1]; c01 = dc[:-1, 1:]
++    c10 = dc[1:, :-1];  c11 = dc[1:, 1:]
++    V_celija = 0.25 * (c00 + c01 + c10 + c11) * hx * hy
++
++    z00 = d[:-1, :-1] > 0; z01 = d[:-1, 1:] > 0
++    z10 = d[1:, :-1] > 0;  z11 = d[1:, 1:] > 0
++    suma_poz = (z00.astype(np.int8) + z01 + z10 + z11)
++    granicne = (suma_poz > 0) & (suma_poz < 4)
++    A_celija = (suma_poz / 4.0) * hx * hy
++
++    if rafiniranje > 0 and np.any(granicne):
++        iy, ix = np.where(granicne)
++        V_fine, A_fine = _rafiniraj_celije(
++            kupa, teren, gx, gy, ix, iy, hx, hy, nivoa=rafiniranje)
++        V_celija = V_celija.astype(float)
++        V_celija[iy, ix] = V_fine
++        A_celija[iy, ix] = A_fine
++
++    # oznaka ćelije = max oznaka njena 4 ugla (granične ćelije u praksi
++    # dodiruju tačno jedan deo; unutrašnje sve uglove istog dela)
++    lab_cell = np.maximum(np.maximum(labels[:-1, :-1], labels[:-1, 1:]),
++                          np.maximum(labels[1:, :-1], labels[1:, 1:]))
++    V_po_delu = np.bincount(lab_cell.ravel(), weights=V_celija.ravel(),
++                            minlength=n_lab + 1)
++    A_po_delu = np.bincount(lab_cell.ravel(), weights=A_celija.ravel(),
++                            minlength=n_lab + 1)
++
++    # --- konture i njihova pripadnost delovima ------------------------------
++    petlje_2d = _konture_nivoa_nula(gx, gy, d)
++    konture_po_delu: dict[int, list] = {L: [] for L in range(1, n_lab + 1)}
++    for p in petlje_2d:
++        # tjemena petlje → indeksi čvorova mreže → većinska (nenulta) oznaka
++        jx = np.clip(np.searchsorted(gx, p[:, 0]) - 1, 0, n - 1)
++        jy = np.clip(np.searchsorted(gy, p[:, 1]) - 1, 0, n - 1)
++        okolne = np.concatenate([labels[jy, jx], labels[jy + 1, jx],
++                                 labels[jy, jx + 1], labels[jy + 1, jx + 1]])
++        okolne = okolne[okolne > 0]
++        if len(okolne) == 0:
++            continue
++        L = int(np.bincount(okolne).argmax())
++        pz = teren.z(p[:, 0], p[:, 1])
++        konture_po_delu[L].append(np.column_stack([p, pz]))
++
++    # --- sklapanje, sortiranje po zapremini, oznake A, B, C, ... -------------
++    delovi = []
++    for L in range(1, n_lab + 1):
++        maska = labels == L
++        d_masked = np.where(maska, d, -np.inf)
++        iy_m, ix_m = np.unravel_index(np.argmax(d_masked), d.shape)
++        cx, cy = float(gx[ix_m]), float(gy[iy_m])
++        delovi.append(DeoPreseka(
++            oznaka="?",
++            zapremina=float(V_po_delu[L]),
++            povrsina=float(A_po_delu[L]),
++            konture=konture_po_delu.get(L, []),
++            centar=(cx, cy, float(teren.z(cx, cy))),
++            max_debljina=float(d[iy_m, ix_m]),
++        ))
++    delovi.sort(key=lambda deo: deo.zapremina, reverse=True)
++    slova = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
++    for i, deo in enumerate(delovi):
++        deo.oznaka = slova[i] if i < len(slova) else f"D{i + 1}"
++    return delovi
++
++
+ # ===========================================================================
+ # EGZAKTNE FORMULE (za validaciju) — zarubljena kupa na ravnom terenu
+ # ===========================================================================
+diff --git a/pipeline_v2.py b/pipeline_v2.py
+index 440e870..a427324 100644
+--- a/pipeline_v2.py
++++ b/pipeline_v2.py
+@@ -20,14 +20,15 @@ i iz konzole / testova.
+ from __future__ import annotations
+ 
+ import time
+-from dataclasses import dataclass, field
++from dataclasses import dataclass, field, replace
+ from typing import Callable, Optional
+ 
+ import numpy as np
+ from matplotlib.path import Path as MplPath
+ from scipy.optimize import differential_evolution
+ 
+-from geometrija_v2 import Kupa, Teren, presek_kupe_i_terena, povrsine_po_zonama
++from geometrija_v2 import (Kupa, Teren, analiza_delova,
++                           presek_kupe_i_terena, povrsine_po_zonama)
+ from ekonomija import cijena_zone, distanca_od_centra_masa, racunaj_troskove
+ 
+ 
+@@ -238,74 +239,147 @@ class RezultatTackeV2:
+     unutar_zone: bool
+     konture: list = field(default_factory=list)
+     trajanje_s: float = 0.0
++    uzeti_deo: str = ""                      # "A"/"B"/... ili "" (jednodelan)
++    delovi: list = field(default_factory=list)  # analiza SVIH delova
+ 
+     ZAGLAVLJE = ["Naziv_tacke", "X", "Y", "Z_vrha", "K", "Funkcija_cilja",
+-                 "Zapremina_m3", "Osnova_m2", "Petlji", "Ugao",
++                 "Zapremina_m3", "Osnova_m2", "Petlji", "Uzeti_deo",
++                 "Delovi", "Ugao",
+                  "Distanca_m", "c1_transport", "c2_visina", "c3_zemljiste",
+                  "Ukupna_cena", "Zone", "Unutar_zone"]
+ 
++    @property
++    def delovi_opis(self) -> str:
++        """Kratak pregled delova za tabelu, npr.
++        'A: 2,145,000 m³ ✓ UZET | B: 310,000 m³ ✗ (zona)'."""
++        if not self.delovi:
++            return ""
++        dijelovi = []
++        for d in self.delovi:
++            if d["uzet"]:
++                status = "✓ UZET"
++            else:
++                status = f"✗ ({d.get('razlog') or 'lošiji'})"
++            dijelovi.append(f"{d['oznaka']}: {d['zapremina']:,.0f} m³ {status}")
++        return " | ".join(dijelovi)
++
+     def kao_red(self) -> list:
+         return [self.naziv, self.wx, self.wy, self.wz, self.k,
+                 self.f_vrednost, self.zapremina, self.povrsina_osnove,
+-                self.broj_petlji, self.ugao, self.distanca,
++                self.broj_petlji, self.uzeti_deo, self.delovi_opis,
++                self.ugao, self.distanca,
+                 self.c1, self.c2, self.c3, self.ukupna_cena,
+                 self.zone, self.unutar_zone]
+ 
+ 
+-def _evaluiraj(wz: float, k: float, wx: float, wy: float,
+-               ctx: KontekstV2, precizno: bool = False):
+-    """Jedna evaluacija: presjek + zapremina + ograničenja + cijena.
++def _prekrsaj_footprinta(konture: list, ctx: KontekstV2) -> str:
++    """Provjera zona za dati skup presječnih kontura (cijeli footprint
++    ili JEDAN njegov deo). Vraća razlog prekršaja ili "" ako je sve OK.
+ 
+-    Vraća (f, rez, eko, zone_str, distanca). f = VELIKA znači nedopustivo.
++    • interesna zona: sve tačke kontura moraju biti unutar poligona;
++    • loše (K) zone: (a) kontura ne smije ulaziti u K zonu,
++      (b) K zona ne smije biti cijela progutana footprintom.
+     """
+-    kupa = Kupa(wx=wx, wy=wy, wz=wz, k=k, ugao=ctx.ugao, profil=ctx.profil)
+-    rez = presek_kupe_i_terena(kupa, ctx.teren,
+-                               rezolucija=ctx.rezolucija,
+-                               rafiniranje=ctx.rafiniranje)
+-    if not rez.ima_preseka or rez.zapremina <= 0:
+-        return VELIKA, rez, 0.0, "", 0.0
+-
+-    V = rez.zapremina
+-    # granice zapremine (kao MATLAB c(1), c(2))
+-    if V < ctx.donja_granica_zapremine or V > ctx.gornja_granica_zapremine:
+-        return VELIKA, rez, 0.0, "", 0.0
+-
+-    # INTERESNA ZONA: stvarni footprint (sve presječne konture) mora biti
+-    # unutar poligona — nasljednik unutarInteresneZone, ali na pravoj konturi
+-    tacke = np.vstack(rez.konture)[:, :2]
++    if not konture:
++        return "nema kontura"
++    tacke = np.vstack(konture)[:, :2]
+     if not np.all(ctx.zona_path().contains_points(tacke)):
+-        return VELIKA, rez, 0.0, "", 0.0
+-
+-    # LOŠE (K) ZONE: footprint kupe ne smije ZAHVATATI lošu zonu.
+-    # Dva testa: (a) presječna kontura ulazi u K zonu; (b) K zona je
+-    # cijela unutar footprinta (kontura je ne siječe, ali je površina
+-    # osnove prekriva) — provjera tjemena K zone unutar kontura.
++        return "zona"
+     if ctx.lose_zone:
+-        konture_paths = [MplPath(k[:, :2]) for k in rez.konture
+-                         if len(k) >= 3]
++        konture_paths = [MplPath(k[:, :2]) for k in konture if len(k) >= 3]
+         for zona, put in ctx.lose_paths():
+             if np.any(put.contains_points(tacke)):
+-                return VELIKA, rez, 0.0, "", 0.0
++                return f"K-zona {zona.naziv}"
+             tjemena = np.column_stack([np.asarray(zona.x_data, float),
+                                        np.asarray(zona.y_data, float)])
+             for kp in konture_paths:
+                 if np.any(kp.contains_points(tjemena)):
+-                    return VELIKA, rez, 0.0, "", 0.0
++                    return f"K-zona {zona.naziv}"
++    return ""
+ 
+-    # DISTANCA od centra masa (transportno ograničenje, MATLAB c(3))
+-    distanca = distanca_od_centra_masa(wx, wy, ctx.centar_masa)
+-    if distanca > ctx.uslov_distance:
+-        return VELIKA, rez, 0.0, "", distanca
+ 
+-    eko, zone_str = ekonomska_cijena_v2(rez, ctx.dobre_zone, precizno=precizno)
++def _evaluiraj(wz: float, k: float, wx: float, wy: float,
++               ctx: KontekstV2, precizno: bool = False):
++    """Jedna evaluacija: presjek + zapremina + ograničenja + cijena.
++
++    Vraća (f, rez, eko, zone_str, distanca, deo_info).
++    f = VELIKA znači nedopustivo.
+ 
+-    # funkcija cilja — identična originalu, ali sa mnv umjesto zakucanog 90
+-    c1 = (distanca / 1000.0) * 0.8 * V
+-    # max(0, ...): kota vrha ispod mnv NE smije davati negativan (nagradni)
+-    # trošak dizanja — bez ovoga GA 'bježi' u kop da naplati kopanje
+-    c2 = V * ((max(wz - ctx.mnv, 0.0) / 0.08 * 1.6) / 1000.0) * 1.2
+-    f = (c1 + c2 + eko) / V
+-    return f, rez, eko, zone_str, distanca
++    VIŠE PETLJI PRESJEKA (npr. rijeka dijeli footprint): svaki povezani
++    deo se analizira ZASEBNO (zapremina, zone) i uzima se NAJBOLJI deo
++    koji zadovoljava uslove — rez, eko i f se tada odnose SAMO na uzeti
++    deo. deo_info = {"uzeti_deo": "B", "delovi": [...]} ili None kada je
++    footprint jednodelan.
++    """
++    kupa = Kupa(wx=wx, wy=wy, wz=wz, k=k, ugao=ctx.ugao, profil=ctx.profil)
++    rez = presek_kupe_i_terena(kupa, ctx.teren,
++                               rezolucija=ctx.rezolucija,
++                               rafiniranje=ctx.rafiniranje)
++    if not rez.ima_preseka or rez.zapremina <= 0:
++        return VELIKA, rez, 0.0, "", 0.0, None
++
++    # DISTANCA od centra masa (transportno ograničenje, MATLAB c(3)) —
++    # zavisi samo od (wx, wy), pa se provjerava prije analize delova
++    distanca = distanca_od_centra_masa(wx, wy, ctx.centar_masa)
++    if distanca > ctx.uslov_distance:
++        return VELIKA, rez, 0.0, "", distanca, None
++
++    def _ocijeni(rez_dio, V):
++        """Zapremina + zone + cijena za cijeli footprint ILI jedan deo."""
++        if V < ctx.donja_granica_zapremine or V > ctx.gornja_granica_zapremine:
++            return VELIKA, 0.0, "", "zapremina"
++        razlog = _prekrsaj_footprinta(rez_dio.konture, ctx)
++        if razlog:
++            return VELIKA, 0.0, "", razlog
++        eko, zone_str = ekonomska_cijena_v2(rez_dio, ctx.dobre_zone,
++                                            precizno=precizno)
++        # funkcija cilja — identična originalu, ali sa mnv umjesto zakucanog 90
++        c1 = (distanca / 1000.0) * 0.8 * V
++        # max(0, ...): kota vrha ispod mnv NE smije davati negativan (nagradni)
++        # trošak dizanja — bez ovoga GA 'bježi' u kop da naplati kopanje
++        c2 = V * ((max(wz - ctx.mnv, 0.0) / 0.08 * 1.6) / 1000.0) * 1.2
++        return (c1 + c2 + eko) / V, eko, zone_str, ""
++
++    # --- VIŠE PETLJI → analiza po delovima ----------------------------------
++    if rez.broj_petlji > 1:
++        delovi = analiza_delova(kupa, ctx.teren,
++                                rezolucija=ctx.rezolucija,
++                                rafiniranje=ctx.rafiniranje)
++        if len(delovi) > 1:
++            ocjene, najbolji_i, najbolja_f = [], -1, VELIKA
++            for i, deo in enumerate(delovi):
++                rez_deo = replace(rez, konture=deo.konture,
++                                  zapremina=deo.zapremina,
++                                  povrsina_osnove=deo.povrsina,
++                                  # broj_petlji ostaje UKUPAN broj petlji
++                                  # cijelog presjeka (za tabelu/metrike)
++                                  max_debljina=deo.max_debljina)
++                f_d, eko_d, zone_d, razlog = _ocijeni(rez_deo, deo.zapremina)
++                ocjene.append((f_d, rez_deo, eko_d, zone_d, razlog))
++                if f_d < najbolja_f:
++                    najbolja_f, najbolji_i = f_d, i
++
++            deo_info = {
++                "uzeti_deo": delovi[najbolji_i].oznaka if najbolji_i >= 0
++                             and najbolja_f < VELIKA else "",
++                "delovi": [{
++                    "oznaka": deo.oznaka,
++                    "zapremina": deo.zapremina,
++                    "povrsina": deo.povrsina,
++                    "konture": deo.konture,
++                    "centar": deo.centar,
++                    "uzet": (i == najbolji_i and najbolja_f < VELIKA),
++                    "razlog": ocjene[i][4],
++                } for i, deo in enumerate(delovi)],
++            }
++            if najbolja_f >= VELIKA:      # nijedan deo ne zadovoljava
++                return VELIKA, rez, 0.0, "", distanca, deo_info
++            f_b, rez_b, eko_b, zone_b, _ = ocjene[najbolji_i]
++            return f_b, rez_b, eko_b, zone_b, distanca, deo_info
++
++    # --- JEDAN deo → klasična ocjena cijelog footprinta ---------------------
++    f, eko, zone_str, _ = _ocijeni(rez, rez.zapremina)
++    return f, rez, eko, zone_str, distanca, None
+ 
+ 
+ def provjeri_footprint(rez, ctx: KontekstV2) -> list[str]:
+@@ -364,8 +438,8 @@ def proracun_tacke(
+     if mod == "fiksno":
+         wz = wz_fiksno if wz_fiksno is not None else z_tu + 40.0
+         k = k_fiksno
+-        f, rez, eko, zone_str, dist = _evaluiraj(wz, k, wx, wy, ctx,
+-                                                 precizno=True)
++        f, rez, eko, zone_str, dist, deo_info = _evaluiraj(
++            wz, k, wx, wy, ctx, precizno=True)
+         if f >= VELIKA:
+             return None
+     else:
+@@ -392,8 +466,8 @@ def proracun_tacke(
+             return None
+         wz, k = float(out.x[0]), float(out.x[1])
+         # finalna evaluacija sa preciznom ekonomijom
+-        f, rez, eko, zone_str, dist = _evaluiraj(wz, k, wx, wy, ctx,
+-                                                 precizno=True)
++        f, rez, eko, zone_str, dist, deo_info = _evaluiraj(
++            wz, k, wx, wy, ctx, precizno=True)
+         if f >= VELIKA:
+             return None
+ 
+@@ -405,7 +479,9 @@ def proracun_tacke(
+         ugao=ctx.ugao, distanca=dist, c1=c1, c2=c2, c3=c3,
+         ukupna_cena=c1 + c2 + c3,
+         zone=zone_str, unutar_zone=True, konture=rez.konture,
+-        trajanje_s=time.perf_counter() - t0)
++        trajanje_s=time.perf_counter() - t0,
++        uzeti_deo=(deo_info or {}).get("uzeti_deo", ""),
++        delovi=(deo_info or {}).get("delovi", []))
+ 
+ 
+ def proracun_svih_tacaka(

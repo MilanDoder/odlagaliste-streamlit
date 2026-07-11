@@ -324,12 +324,44 @@ def fig_tacka(teren, r: RezultatTackeV2, ctx: KontekstV2,
                            colorscale=[[0, "peru"], [1, "burlywood"]],
                            showscale=False, name="nasip (iznad terena)"))
 
-    for i, kont in enumerate(rez.konture):
-        f.add_trace(go.Scatter3d(x=kont[:, 0], y=kont[:, 1],
-                                 z=kont[:, 2] + 0.4, mode="lines",
-                                 line=dict(color="red", width=8),
-                                 name="presjek kupa–teren",
-                                 showlegend=(i == 0)))
+    if getattr(r, "delovi", None):
+        # VIŠE DELOVA: uzeti deo crveno, odbačeni sivo + oznake A, B, C...
+        prvi_uzet, prvi_odb = True, True
+        for deo in r.delovi:
+            boja = "red" if deo["uzet"] else "gray"
+            ime = ("presjek — uzeti deo" if deo["uzet"]
+                   else "presjek — odbačeni deo")
+            for kont in deo["konture"]:
+                kont = np.asarray(kont)
+                f.add_trace(go.Scatter3d(
+                    x=kont[:, 0], y=kont[:, 1], z=kont[:, 2] + 0.4,
+                    mode="lines", line=dict(color=boja, width=8),
+                    name=ime,
+                    showlegend=(prvi_uzet if deo["uzet"] else prvi_odb)))
+                if deo["uzet"]:
+                    prvi_uzet = False
+                else:
+                    prvi_odb = False
+            cx, cy, cz = deo["centar"]
+            status = "✓" if deo["uzet"] else "✗"
+            f.add_trace(go.Scatter3d(
+                x=[cx], y=[cy], z=[cz + 8],
+                mode="text", text=[f"{deo['oznaka']} {status}"],
+                textfont=dict(size=22, color=boja),
+                name=f"deo {deo['oznaka']}", showlegend=False,
+                hovertext=(f"Deo {deo['oznaka']}: "
+                           f"V = {deo['zapremina']:,.0f} m³, "
+                           f"P = {deo['povrsina']:,.0f} m²"
+                           + ("" if deo["uzet"]
+                              else f" — odbačen ({deo.get('razlog', '')})")),
+                hoverinfo="text"))
+    else:
+        for i, kont in enumerate(rez.konture):
+            f.add_trace(go.Scatter3d(x=kont[:, 0], y=kont[:, 1],
+                                     z=kont[:, 2] + 0.4, mode="lines",
+                                     line=dict(color="red", width=8),
+                                     name="presjek kupa–teren",
+                                     showlegend=(i == 0)))
     _dodaj_zone_na_teren(f, teren, dobre, lose)
 
     kx, ky = kupa.gornja_kontura()
@@ -622,10 +654,22 @@ with tab3:
         m2.metric("Zapremina", f"{sel.zapremina:,.0f} m³")
         m3.metric("Vrh / k", f"{sel.wz:.1f} m / {sel.k:.0f} m")
         m4.metric("Distanca od CM", f"{sel.distanca:.0f} m")
-        m5.metric("Petlji presjeka", sel.broj_petlji)
+        m5.metric("Petlji presjeka", sel.broj_petlji,
+                  delta=f"uzet deo {sel.uzeti_deo}" if sel.uzeti_deo else None,
+                  delta_color="off")
         m6.metric("Ukupna cijena", f"{sel.ukupna_cena:,.0f}")
         if sel.zone:
             st.caption(f"Ekonomske zone: {sel.zone}")
+        if sel.delovi:
+            st.info("Presjek ima više odvojenih delova — analiziran je "
+                    "svaki zasebno, a zapremina/cijena se odnose SAMO na "
+                    f"uzeti deo **{sel.uzeti_deo}**:\n\n"
+                    + "\n".join(
+                        f"- **{d['oznaka']}**: V = {d['zapremina']:,.0f} m³, "
+                        f"P = {d['povrsina']:,.0f} m² — "
+                        + ("✅ **uzet**" if d["uzet"]
+                           else f"❌ odbačen ({d.get('razlog') or 'lošiji'})")
+                        for d in sel.delovi))
         st.plotly_chart(fig_tacka(teren, sel, ctx, cijela_kupa=cijela,
                                   z_uvecanje=z_uv, dobre=dobre, lose=lose),
                         use_container_width=True)

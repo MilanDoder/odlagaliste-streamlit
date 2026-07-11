@@ -501,6 +501,136 @@ def _rafiniraj_celije_abs(kupa: Kupa, teren: Teren,
 
 
 # ===========================================================================
+# ANALIZA DELOVA — kada presjek ima VIŠE odvojenih petlji (npr. rijeka
+# presiječe footprint), svaki povezani deo {d > 0} se analizira zasebno:
+# sopstvena zapremina, površina, konture i oznaka (A, B, C, ...).
+# ===========================================================================
+
+@dataclass
+class DeoPreseka:
+    """Jedan povezani deo footprinta {d > 0} — zaseban 'nasip'."""
+    oznaka: str                  # "A", "B", "C", ... (A = najveća zapremina)
+    zapremina: float             # m³ — zapremina samo ovog dela
+    povrsina: float              # m² — površina osnove samo ovog dela
+    konture: list                # lista (K_i, 3) 3D petlji koje pripadaju delu
+    centar: tuple                # (x, y, z_teren) tačka najveće debljine —
+                                 # pogodna za postavljanje oznake na prikazu
+    max_debljina: float          # m — najveća visina nasipa u delu
+
+
+def analiza_delova(
+    kupa: Kupa,
+    teren: Teren,
+    rezolucija: int = 256,
+    rafiniranje: int = 2,
+    margina: float = 1.05,
+) -> list[DeoPreseka]:
+    """Podjela presjeka na povezane delove sa zapreminom po delu.
+
+    Koristi ISTU mrežu i isti integracioni postupak kao
+    presek_kupe_i_terena (trapez + rafiniranje graničnih ćelija), pa je
+    zbir zapremina svih delova ≈ ukupna zapremina iz PresekRezultat.
+
+    Povezanost: 8-susjedstvo nad maskom {d > 0} (scipy.ndimage.label).
+    Svaka presječna petlja se dodjeljuje delu čije pozitivne čvorove
+    dodiruje (većinsko glasanje po tjemenima petlje) — tako i eventualne
+    'rupe' (ostrva terena) ostaju uz svoj deo.
+
+    Returns:
+        lista DeoPreseka, sortirana po zapremini opadajuće i označena
+        slovima A, B, C, ... — prazna lista ako presjeka nema.
+    """
+    from scipy import ndimage
+
+    # --- ista mreža kao u presek_kupe_i_terena ------------------------------
+    R = kupa.max_radijus(teren.z_min) * margina
+    x0, x1 = kupa.wx - R, kupa.wx + R
+    y0, y1 = kupa.wy - R, kupa.wy + R
+    n = int(rezolucija)
+    gx = np.linspace(x0, x1, n + 1)
+    gy = np.linspace(y0, y1, n + 1)
+    hx = (x1 - x0) / n
+    hy = (y1 - y0) / n
+
+    GX, GY = np.meshgrid(gx, gy)
+    d = kupa.z(GX, GY) - teren.z(GX, GY)
+    poz = d > 0.0
+    if not np.any(poz):
+        return []
+
+    # --- povezani delovi (8-susjedstvo) -------------------------------------
+    labels, n_lab = ndimage.label(poz, structure=np.ones((3, 3), int))
+    if n_lab == 0:
+        return []
+
+    # --- zapremina i površina po ćelijama (kao u presek_kupe_i_terena) ------
+    dc = np.maximum(d, 0.0)
+    c00 = dc[:-1, :-1]; c01 = dc[:-1, 1:]
+    c10 = dc[1:, :-1];  c11 = dc[1:, 1:]
+    V_celija = 0.25 * (c00 + c01 + c10 + c11) * hx * hy
+
+    z00 = d[:-1, :-1] > 0; z01 = d[:-1, 1:] > 0
+    z10 = d[1:, :-1] > 0;  z11 = d[1:, 1:] > 0
+    suma_poz = (z00.astype(np.int8) + z01 + z10 + z11)
+    granicne = (suma_poz > 0) & (suma_poz < 4)
+    A_celija = (suma_poz / 4.0) * hx * hy
+
+    if rafiniranje > 0 and np.any(granicne):
+        iy, ix = np.where(granicne)
+        V_fine, A_fine = _rafiniraj_celije(
+            kupa, teren, gx, gy, ix, iy, hx, hy, nivoa=rafiniranje)
+        V_celija = V_celija.astype(float)
+        V_celija[iy, ix] = V_fine
+        A_celija[iy, ix] = A_fine
+
+    # oznaka ćelije = max oznaka njena 4 ugla (granične ćelije u praksi
+    # dodiruju tačno jedan deo; unutrašnje sve uglove istog dela)
+    lab_cell = np.maximum(np.maximum(labels[:-1, :-1], labels[:-1, 1:]),
+                          np.maximum(labels[1:, :-1], labels[1:, 1:]))
+    V_po_delu = np.bincount(lab_cell.ravel(), weights=V_celija.ravel(),
+                            minlength=n_lab + 1)
+    A_po_delu = np.bincount(lab_cell.ravel(), weights=A_celija.ravel(),
+                            minlength=n_lab + 1)
+
+    # --- konture i njihova pripadnost delovima ------------------------------
+    petlje_2d = _konture_nivoa_nula(gx, gy, d)
+    konture_po_delu: dict[int, list] = {L: [] for L in range(1, n_lab + 1)}
+    for p in petlje_2d:
+        # tjemena petlje → indeksi čvorova mreže → većinska (nenulta) oznaka
+        jx = np.clip(np.searchsorted(gx, p[:, 0]) - 1, 0, n - 1)
+        jy = np.clip(np.searchsorted(gy, p[:, 1]) - 1, 0, n - 1)
+        okolne = np.concatenate([labels[jy, jx], labels[jy + 1, jx],
+                                 labels[jy, jx + 1], labels[jy + 1, jx + 1]])
+        okolne = okolne[okolne > 0]
+        if len(okolne) == 0:
+            continue
+        L = int(np.bincount(okolne).argmax())
+        pz = teren.z(p[:, 0], p[:, 1])
+        konture_po_delu[L].append(np.column_stack([p, pz]))
+
+    # --- sklapanje, sortiranje po zapremini, oznake A, B, C, ... -------------
+    delovi = []
+    for L in range(1, n_lab + 1):
+        maska = labels == L
+        d_masked = np.where(maska, d, -np.inf)
+        iy_m, ix_m = np.unravel_index(np.argmax(d_masked), d.shape)
+        cx, cy = float(gx[ix_m]), float(gy[iy_m])
+        delovi.append(DeoPreseka(
+            oznaka="?",
+            zapremina=float(V_po_delu[L]),
+            povrsina=float(A_po_delu[L]),
+            konture=konture_po_delu.get(L, []),
+            centar=(cx, cy, float(teren.z(cx, cy))),
+            max_debljina=float(d[iy_m, ix_m]),
+        ))
+    delovi.sort(key=lambda deo: deo.zapremina, reverse=True)
+    slova = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+    for i, deo in enumerate(delovi):
+        deo.oznaka = slova[i] if i < len(slova) else f"D{i + 1}"
+    return delovi
+
+
+# ===========================================================================
 # EGZAKTNE FORMULE (za validaciju) — zarubljena kupa na ravnom terenu
 # ===========================================================================
 
