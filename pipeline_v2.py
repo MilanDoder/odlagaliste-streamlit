@@ -308,6 +308,37 @@ def _evaluiraj(wz: float, k: float, wx: float, wy: float,
     return f, rez, eko, zone_str, distanca
 
 
+def provjeri_footprint(rez, ctx: KontekstV2) -> list[str]:
+    """Provjere footprinta (presječnih kontura) prema ograničenjima:
+    interesna zona i loše (K) zone. Vraća listu prekršaja (prazna = OK).
+
+    Ista logika kao u _evaluiraj, ali kao javna funkcija za upotrebu
+    van GA petlje (npr. tab 'Stepenasti prikaz' — širenje dna pri
+    povećanju visine mora ostati unutar zone i van K zona).
+    """
+    prekrsaji: list[str] = []
+    if not rez.ima_preseka or not rez.konture:
+        return ["kupa nema presjeka s terenom"]
+
+    tacke = np.vstack(rez.konture)[:, :2]
+    if not np.all(ctx.zona_path().contains_points(tacke)):
+        prekrsaji.append("footprint izlazi iz interesne zone")
+
+    if ctx.lose_zone:
+        konture_paths = [MplPath(k[:, :2]) for k in rez.konture
+                         if len(k) >= 3]
+        for zona, put in ctx.lose_paths():
+            pogodak = np.any(put.contains_points(tacke))
+            if not pogodak:
+                tjemena = np.column_stack([np.asarray(zona.x_data, float),
+                                           np.asarray(zona.y_data, float)])
+                pogodak = any(np.any(kp.contains_points(tjemena))
+                              for kp in konture_paths)
+            if pogodak:
+                prekrsaji.append(f"footprint zahvata lošu zonu {zona.naziv}")
+    return prekrsaji
+
+
 def proracun_tacke(
     naziv: str, wx: float, wy: float, ctx: KontekstV2,
     mod: str = "ga",

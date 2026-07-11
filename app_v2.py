@@ -123,7 +123,7 @@ def _teren_grid(teren: Teren, n: int = 150):
 
 
 BOJE_ZONA = [("Z-1", "orange"), ("Z-2", "green"), ("Z-3", "dodgerblue"),
-             ("Z-4", "hotpink"), ("K", "red"), ("Z-5", "red")]
+             ("Z-4", "hotpink"), ("K", "purple"), ("Z-5", "purple")]
 
 
 def _boja_zone(naziv: str) -> str:
@@ -136,7 +136,7 @@ def _boja_zone(naziv: str) -> str:
 def fig_pregled(teren, cm, granice, dobre, lose):
     """Tab Podaci: teren, centar masa, granica interesne zone i sve zone
     interesa obojene po prefiksu (Z-1 narandžasta, Z-2 zelena, Z-3 plava,
-    Z-4 roza, K crvena). Zone istog prefiksa su jedan trace (poligoni
+    Z-4 roza, K ljubičasta). Zone istog prefiksa su jedan trace (poligoni
     razdvojeni None tačkama) — brzo i sa jednom stavkom u legendi.
     """
     GX, GY, ZT = _teren_grid(teren)
@@ -230,7 +230,7 @@ def fig_mc_3d(teren, granice, mc: MCTacke, cm, uslov,
 
     boje = {"van interesne zone": "gray", "u lošoj (K) zoni": "black",
             "predaleko od centra masa": "orange",
-            "van pokrivenosti terena": "purple"}
+            "van pokrivenosti terena": "saddlebrown"}
     if prikazi_odbacene:
         for razlog, t in mc.odbacene.items():
             if len(t) == 0:
@@ -679,12 +679,68 @@ with tab4:
                                  min_value=0.0, max_value=50.0, value=4.0,
                                  step=0.5)
 
+        rast = st.radio(
+            "Način rasta kupe",
+            ["Fiksno dno (dno kao original, plato se sužava)",
+             "Fiksni plato (k kao original, dno se širi)"],
+            horizontal=True,
+            help="Fiksno dno: footprint ostaje kao kod originalne kupe, "
+                 "visina raste sužavanjem platoa. Fiksni plato: k ostaje "
+                 "isti, pa svaka dodatna visina širi dno za ΔH/tan(ugao) "
+                 "+ berme.")
+
+        k_novo = rk.k
+        if rast.startswith("Fiksno dno") and rk.konture:
+            # cilj: max poluprečnik footprinta = kao kod originalne kupe
+            svek0 = np.vstack(rk.konture)
+            r_cilj = float(np.hypot(svek0[:, 0] - rk.wx,
+                                    svek0[:, 1] - rk.wy).max())
+
+            def _r_max(k_probe: float) -> float:
+                sk_ = StepenastaKupa(wx=rk.wx, wy=rk.wy, wz=float(wz_novo),
+                                     k=float(k_probe), ugao=rk.ugao,
+                                     korak=float(korak), berma=float(berma),
+                                     profil=ctx.profil)
+                r_ = presek_kupe_i_terena(sk_, teren, rezolucija=160,
+                                          rafiniranje=1)
+                if not r_.ima_preseka or not r_.konture:
+                    return 0.0
+                sv = np.vstack(r_.konture)
+                return float(np.hypot(sv[:, 0] - rk.wx,
+                                      sv[:, 1] - rk.wy).max())
+
+            k_lo, k_hi = 2.0, rk.k + max(0.0, (rk.wz - wz_novo)
+                                         / skupa_tan(rk.ugao)) + 5.0                 if False else (2.0, rk.k * 1.5 + 50.0)
+            k_lo, k_hi = 2.0, rk.k * 1.5 + 50.0
+            if _r_max(k_lo) > r_cilj + 1.0:
+                tan_ef = float(korak) / (float(korak)
+                                         / np.tan(np.radians(rk.ugao))
+                                         + float(berma))
+                wz_max = rk.wz + (rk.k - k_lo) * tan_ef
+                st.error(f"Tražena visina je prevelika za fiksno dno — "
+                         f"plato bi morao ispod {k_lo:.0f} m. Maksimalna "
+                         f"kota vrha uz ovo dno je ≈ {wz_max:.0f} m "
+                         f"(ili smanji korak/bermu).")
+                st.stop()
+            for _ in range(10):                       # bisekcija po k
+                k_mid = 0.5 * (k_lo + k_hi)
+                if _r_max(k_mid) > r_cilj:
+                    k_hi = k_mid
+                else:
+                    k_lo = k_mid
+            k_novo = 0.5 * (k_lo + k_hi)
+            st.caption(f"Fiksno dno: plato sužen sa k = {rk.k:.0f} m na "
+                       f"**k = {k_novo:.1f} m** (ciljni poluprečnik dna "
+                       f"{r_cilj:.0f} m).")
+
         skupa = StepenastaKupa(wx=rk.wx, wy=rk.wy, wz=float(wz_novo),
-                               k=rk.k, ugao=rk.ugao, korak=float(korak),
+                               k=float(k_novo), ugao=rk.ugao,
+                               korak=float(korak),
                                berma=float(berma), profil=ctx.profil)
         rez_s = presek_kupe_i_terena(skupa, teren, rezolucija=256,
                                      rafiniranje=2)
-        glatka = Kupa(wx=rk.wx, wy=rk.wy, wz=float(wz_novo), k=rk.k,
+        glatka = Kupa(wx=rk.wx, wy=rk.wy, wz=float(wz_novo),
+                      k=float(k_novo),
                       ugao=rk.ugao, profil=ctx.profil)
         rez_g = presek_kupe_i_terena(glatka, teren, rezolucija=256,
                                      rafiniranje=1)
@@ -693,6 +749,16 @@ with tab4:
             st.warning("Stepenasta kupa nema presjeka s terenom — podigni "
                        "novu kotu vrha.")
         else:
+            from pipeline_v2 import provjeri_footprint
+            prekrsaji = provjeri_footprint(rez_s, ctx)
+            if prekrsaji:
+                st.error("Novo (šire) dno krši ograničenja: "
+                         + "; ".join(prekrsaji)
+                         + ". Smanji visinu, koristi 'Fiksno dno' ili "
+                           "smanji bermu.")
+            else:
+                st.success("Footprint stepenaste kupe je unutar interesne "
+                           "zone i van loših (K) zona.")
             m1_, m2_, m3_, m4_ = st.columns(4)
             m1_.metric("Zapremina (stepenasta)",
                        f"{rez_s.zapremina:,.0f} m³",
