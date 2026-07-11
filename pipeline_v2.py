@@ -426,3 +426,4 @@ def proracun_svih_tacaka(
             callback(i + 1, n, r)
     rezultati.sort(key=lambda r: r.f_vrednost)
     return rezultati
+
