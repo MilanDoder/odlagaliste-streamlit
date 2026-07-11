@@ -252,10 +252,11 @@ class RezultatTackeV2:
     def delovi_opis(self) -> str:
         """Kratak pregled delova za tabelu, npr.
         'A: 2,145,000 m³ ✓ UZET | B: 310,000 m³ ✗ (zona)'."""
-        if not self.delovi:
+        delovi = getattr(self, "delovi", None) or []
+        if not delovi:
             return ""
         dijelovi = []
-        for d in self.delovi:
+        for d in delovi:
             if d["uzet"]:
                 status = "✓ UZET"
             else:
@@ -266,7 +267,8 @@ class RezultatTackeV2:
     def kao_red(self) -> list:
         return [self.naziv, self.wx, self.wy, self.wz, self.k,
                 self.f_vrednost, self.zapremina, self.povrsina_osnove,
-                self.broj_petlji, self.uzeti_deo, self.delovi_opis,
+                self.broj_petlji, getattr(self, "uzeti_deo", ""),
+                self.delovi_opis,
                 self.ugao, self.distanca,
                 self.c1, self.c2, self.c3, self.ukupna_cena,
                 self.zone, self.unutar_zone]
