@@ -27,6 +27,15 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+
+# pandas 3.x po defaultu koristi pyarrow za string kolone — ta putanja
+# (string_arrow._from_sequence) segfault-uje pod Streamlit thread-om na
+# Streamlit Cloud okruženju. Python storage je stabilan i funkcionalno isti.
+try:
+    pd.set_option("mode.string_storage", "python")
+except Exception:
+    pass  # starije pandas verzije (2.x) — opcija nije potrebna
+
 import plotly.graph_objects as go
 import streamlit as st
 
@@ -457,6 +466,11 @@ with tab2:
 
     if "mc" in st.session_state:
         mc: MCTacke = st.session_state["mc"]
+        _gen = mc.statistika.get("generisano")
+        if _gen is not None and int(n_mc) != int(_gen):
+            st.warning(f"Prikazane tačke su generisane sa **{_gen}** — "
+                       f"uneseno je **{int(n_mc)}**. Klikni „Generiši "
+                       f"tačke” da se primijeni novi broj.")
         st.write({k: v for k, v in mc.statistika.items()})
 
         cO1, cO2 = st.columns(2)
